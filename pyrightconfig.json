@@ -1,0 +1,29 @@
+{
+    "pythonPath": "/home/fze/envs/py310/bin/python",
+    "pythonPlatform": "Linux",
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "pythonPath": "/home/fze/envs/py310/bin/python",
+            "extraPaths": [
+                "./src",
+                "./src/monitor"
+            ]
+        }
+    ],
+    "include": [
+        "src",
+        "tests"
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        ".git",
+        "./tmp"
+    ],
+    "reportMissingImports": "warning",
+    "reportMissingTypeStubs": false,
+    "typeCheckingMode": "basic",
+    "useLibraryCodeForTypes": true,
+    "autoSearchPaths": true
+} 

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monitor"
+version = "0.1.0"
+description = "VLM Video Monitoring System"
+requires-python = ">=3.7"
+dependencies = [
+    "opencv-python",
+    "requests",
+    "numpy"
+]
+
+[project.scripts]
+monitor = "monitor.main:main"
+
+[tool.setuptools]
+packages = ["monitor"]
+package-dir = {"monitor" = "src"}
+
+[tool.pylsp-mypy]
+enabled = true
+live_mode = true
+
+[tool.pyright]
+pythonPath = "/home/fze/envs/py310/bin/python"
+include = ["src", "tests"]
+exclude = ["**/__pycache__"]
+reportMissingImports = "warning"
+reportMissingTypeStubs = false
+typeCheckingMode = "basic"
+
+[tool.pylance]
+extraPaths = ["./src"] 
