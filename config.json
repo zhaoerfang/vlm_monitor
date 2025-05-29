@@ -1,0 +1,34 @@
+{
+  "video_processing": {
+    "target_video_duration": 3.0,
+    "frames_per_second": 5,
+    "target_frames_per_video": 15,
+    "comment": "从原始帧率中每秒抽取5帧，3秒视频共15帧"
+  },
+  "rtsp": {
+    "default_fps": 25.0,
+    "auto_detect_fps": true,
+    "client_buffer_size": 100,
+    "connection_timeout": 60,
+    "comment": "RTSP流处理配置，auto_detect_fps启用时会自动检测真实帧率"
+  },
+  "vlm": {
+    "api_key": "sk-88c79b5d716645f39a44b0e5ce2d4541",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen-vl-max-latest",
+    "max_concurrent_inferences": 3,
+    "max_video_size_mb": 100,
+    "max_base64_size_mb": 10,
+    "default_prompt": {
+      "system": "You are a helpful assistant that analyzes videos and returns structured JSON responses.",
+      "user_template": "请分析这段视频并以JSON格式回复，包含以下信息：\n{\n  \"timestamp\": \"当前时间(ISO格式)\",\n  \"people_count\": 人数,\n  \"people\": [\n    {\n      \"id\": 人员编号,\n      \"bbox\": [x, y, width, height],\n      \"activity\": \"正在做什么\"\n    }\n  ],\n  \"summary\": \"一句话概括场景\"\n}\n\n要求：\n1. 如果没有人，people_count为0，people为空数组\n2. bbox坐标为相对坐标(0-1之间)\n3. 回复要简洁，activity用简短词语描述\n4. 只返回JSON，不要其他文字"
+    },
+    "comment": "VLM推理相关配置，包含API密钥、模型、并发数等"
+  },
+  "testing": {
+    "n_frames_default": 50,
+    "result_timeout": 180,
+    "collection_timeout": 120,
+    "comment": "测试相关配置，n_frames_default是进度报告间隔"
+  }
+} 

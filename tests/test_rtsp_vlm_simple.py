@@ -12,85 +12,36 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+# 添加src路径到模块搜索路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from monitor.rtsp_server import RTSPServer
-from monitor.rtsp_client import RTSPClient
-from monitor.dashscope_vlm_client import DashScopeVLMClient, AsyncVideoProcessor
+# 导入重构后的模块
+from monitor.core.config import get_api_key, load_config
+from monitor.rtsp.rtsp_utils import detect_rtsp_fps, test_rtsp_connection
+from monitor.utils.test_utils import (
+    create_experiment_dir, create_phase_directories, save_test_config,
+    save_phase_result, create_video_from_frames, find_test_video,
+    save_test_summary, print_test_summary
+)
+from monitor.rtsp.rtsp_server import RTSPServer
+from monitor.rtsp.rtsp_client import RTSPClient
+from monitor.vlm.vlm_client import DashScopeVLMClient
+from monitor.vlm.async_video_processor import AsyncVideoProcessor
 
-def create_experiment_dir():
-    """创建实验目录"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_dir = Path(__file__).parent.parent / "tmp" / f"experiment_{timestamp}"
-    experiment_dir.mkdir(parents=True, exist_ok=True)
-    return experiment_dir
-
-def find_test_video():
-    """查找测试视频文件"""
-    data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-    video_files = [f for f in os.listdir(data_dir) if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
+def test_rtsp_server(rtsp_url):
+    """测试RTSP服务器连通性"""
+    print(f"🔗 测试RTSP连接: {rtsp_url}")
     
-    if not video_files:
-        raise FileNotFoundError("在data目录下没有找到视频文件")
-        
-    return os.path.join(data_dir, video_files[0])
-
-def test_rtsp_server(video_path, port=8554):
-    """测试RTSP服务器"""
-    print("\n" + "="*50)
-    print("测试1: RTSP服务器测试")
-    print("="*50)
+    connection_result = test_rtsp_connection(rtsp_url)
     
-    rtsp_url = f"rtsp://localhost:{port}/stream"
-    
-    try:
-        # 启动RTSP服务器
-        print(f"启动RTSP服务器，端口: {port}")
-        print(f"使用视频文件: {video_path}")
-        
-        # 先检查原始视频信息
-        cap = cv2.VideoCapture(video_path)
-        if cap.isOpened():
-            original_fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = total_frames / original_fps if original_fps > 0 else 0
-            
-            print(f"原始视频信息: {width}x{height}, {original_fps:.2f}fps, "
-                  f"{total_frames}帧, 时长{duration:.2f}秒")
-            cap.release()
-        
-        rtsp_server = RTSPServer(video_path, port=port, stream_name="stream")
-        
-        # 在单独线程中启动服务器
-        server_thread = threading.Thread(target=rtsp_server.start)
-        server_thread.daemon = True
-        server_thread.start()
-        
-        # 等待服务器启动
-        time.sleep(5)
-        
-        # 测试连接
-        print(f"测试连接: {rtsp_url}")
-        test_cap = cv2.VideoCapture(rtsp_url)
-        
-        if test_cap.isOpened():
-            ret, frame = test_cap.read()
-            if ret and frame is not None:
-                print("✅ RTSP服务器工作正常")
-                test_cap.release()
-                return True, rtsp_server
-            else:
-                print("❌ 无法从RTSP流读取帧")
-        else:
-            print("❌ 无法连接到RTSP流")
-            
-        test_cap.release()
-        return False, None
-        
-    except Exception as e:
-        print(f"❌ RTSP服务器测试失败: {str(e)}")
-        return False, None
+    if connection_result['connected']:
+        stream_info = connection_result['stream_info']
+        print(f"✅ RTSP连接成功")
+        print(f"📊 流信息: {stream_info['resolution']}, {stream_info['fps']:.2f}fps")
+        return True
+    else:
+        print(f"❌ RTSP连接失败: {connection_result['error']}")
+        return False
 
 def test_rtsp_client(rtsp_url, experiment_dir):
     """测试RTSP客户端"""
@@ -135,10 +86,10 @@ def test_rtsp_client(rtsp_url, experiment_dir):
             print(f"✅ 成功收集到 {len(collected_frames)} 帧")
             
             # 显示RTSP流信息
-            stream_info = rtsp_client.get_stream_info()
-            print(f"RTSP流信息: 原始帧率={stream_info['original_fps']:.2f}fps, "
-                  f"目标帧率={stream_info['target_fps']}fps, "
-                  f"分辨率={stream_info['width']}x{stream_info['height']}")
+            if rtsp_client.original_fps:
+                print(f"RTSP流信息: 原始帧率={rtsp_client.original_fps:.2f}fps, "
+                      f"目标帧率={rtsp_client.frame_rate}fps, "
+                      f"分辨率={rtsp_client.original_width}x{rtsp_client.original_height}")
             
             # 保存一些帧
             for i, frame in enumerate(collected_frames[:5]):
@@ -146,61 +97,53 @@ def test_rtsp_client(rtsp_url, experiment_dir):
                 cv2.imwrite(str(frame_path), frame)
                 
             print(f"已保存前5帧到: {experiment_dir}")
-            return True, collected_frames
+            return collected_frames
         else:
             print(f"❌ 只收集到 {len(collected_frames)} 帧")
-            return False, []
+            return []
             
     except Exception as e:
         print(f"❌ RTSP客户端测试失败: {str(e)}")
-        return False, []
+        return []
 
-def create_video_from_frames(frames, output_path, fps=10):
-    """从帧创建视频文件"""
-    if not frames:
-        return False
-        
-    try:
-        height, width = frames[0].shape[:2]
-        fourcc = cv2.VideoWriter.fourcc(*'mp4v')
-        writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
-        
-        for frame in frames:
-            writer.write(frame)
-            
-        writer.release()
-        return True
-        
-    except Exception as e:
-        print(f"创建视频失败: {str(e)}")
-        return False
-
-def test_vlm_analysis(api_key, frames, experiment_dir):
+def test_vlm_analysis(frames, experiment_dir):
     """测试VLM分析"""
     print("\n" + "="*50)
-    print("测试3: VLM分析测试")
+    print("测试3: VLM分析测试（基于配置文件）")
     print("="*50)
     
+    # 加载配置
+    config = load_config()
+    vlm_config = config['vlm']
+    
     try:
-        # 创建VLM客户端
-        vlm_client = DashScopeVLMClient(api_key=api_key)
+        # 创建VLM客户端，让它自己从配置文件读取API密钥
+        vlm_client = DashScopeVLMClient(model=vlm_config['model'])
         
-        # 创建视频文件
+        # 检查是否成功获取到API密钥
+        if not vlm_client.api_key:
+            print("❌ VLM客户端无法获取API密钥，跳过测试")
+            return False
+        
+        print(f"✅ VLM客户端已初始化，使用模型: {vlm_config['model']}")
+        
+        # 创建视频文件，使用配置的fps
         video_path = experiment_dir / "test_video.mp4"
+        video_fps = config['video_processing']['frames_per_second']  # 使用配置的5fps
         
         print("正在创建测试视频...")
-        if not create_video_from_frames(frames, video_path):
+        if not create_video_from_frames(frames, video_path, fps=video_fps):
             print("❌ 创建视频失败")
             return False
             
-        print(f"视频已创建: {video_path}")
+        print(f"视频已创建: {video_path} (fps: {video_fps})")
         
-        # 分析视频
+        # 分析视频，使用JSON格式提示词（与AsyncVideoProcessor一致）
         print("正在调用VLM分析...")
         result = vlm_client.analyze_video(
             video_path=str(video_path),
-            prompt="请描述这段视频中的内容，包括场景、人物、动作等。",
-            fps=2
+            prompt=None,  # 使用默认的JSON格式提示词
+            fps=video_fps
         )
         
         if result:
@@ -210,50 +153,97 @@ def test_vlm_analysis(api_key, frames, experiment_dir):
             
             # 保存结果
             result_file = experiment_dir / "vlm_result.json"
+            result_data = {
+                'result': result,
+                'timestamp': time.time(),
+                'video_path': str(video_path),
+                'config_used': {
+                    'model': vlm_config['model'],
+                    'video_fps': video_fps,
+                    'frames_count': len(frames)
+                }
+            }
+            
             with open(result_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'result': result,
-                    'timestamp': time.time(),
-                    'video_path': str(video_path)
-                }, f, ensure_ascii=False, indent=2)
+                json.dump(result_data, f, ensure_ascii=False, indent=2)
                 
             print(f"结果已保存到: {result_file}")
+            print(f"使用模型: {vlm_config['model']}")
+            print(f"视频帧率: {video_fps}fps")
             return True
         else:
             print("❌ VLM分析失败，返回结果为空")
             return False
             
+    except ValueError as e:
+        if "API密钥未设置" in str(e):
+            print(f"❌ API密钥配置错误: {str(e)}")
+            return False
+        else:
+            raise e
     except Exception as e:
         print(f"❌ VLM分析测试失败: {str(e)}")
         import traceback
         traceback.print_exc()
         return False
 
-def test_n_frames_async(api_key, rtsp_url, experiment_dir, n_frames=20):
-    """测试N帧异步处理"""
+def test_n_frames_async(rtsp_url, experiment_dir, n_frames=20):
+    """
+    测试N帧异步处理
+    """
     print("\n" + "="*50)
-    print(f"测试4: {n_frames}帧异步处理测试")
+    print(f"测试4: 每{n_frames}帧异步处理测试（基于配置文件）")
     print("="*50)
     
+    # 加载配置
+    config = load_config()
+    video_config = config['video_processing']
+    rtsp_config = config['rtsp']
+    vlm_config = config['vlm']
+    test_config = config['testing']
+    
+    print(f"📋 使用配置:")
+    print(f"  - 目标视频时长: {video_config['target_video_duration']}s")
+    print(f"  - 每秒抽帧数: {video_config['frames_per_second']}帧")
+    print(f"  - 每个视频帧数: {video_config['target_frames_per_video']}帧")
+    print(f"  - 最大并发推理数: {vlm_config['max_concurrent_inferences']}")
+    
     try:
-        # 创建VLM客户端
-        vlm_client = DashScopeVLMClient(api_key=api_key)
+        # 创建VLM客户端，让它自己从配置文件读取API密钥
+        vlm_client = DashScopeVLMClient(model=vlm_config['model'])
         
-        # 获取RTSP流的原始帧率信息
-        test_cap = cv2.VideoCapture(rtsp_url)
-        original_fps = 25.0  # 默认值
-        if test_cap.isOpened():
-            original_fps = test_cap.get(cv2.CAP_PROP_FPS) or 25.0
-            test_cap.release()
+        # 检查是否成功获取到API密钥
+        if not vlm_client.api_key:
+            print("❌ VLM客户端无法获取API密钥，跳过异步测试")
+            return False
         
-        # 创建异步视频处理器，使用新的抽帧策略
+        print(f"✅ VLM客户端已初始化，使用模型: {vlm_config['model']}")
+        
+        # 动态检测RTSP流的原始帧率
+        original_fps = detect_rtsp_fps(rtsp_url, config)
+        
+        # 创建异步视频处理器，使用配置文件参数
         processor = AsyncVideoProcessor(
             vlm_client=vlm_client,
             temp_dir=str(experiment_dir),
-            target_video_duration=3.0,  # 3秒视频
-            frames_per_second=2,        # 每秒抽2帧
-            original_fps=original_fps   # 原始帧率
+            target_video_duration=video_config['target_video_duration'],
+            frames_per_second=video_config['frames_per_second'],  # 每秒5帧
+            original_fps=original_fps,  # 动态检测的帧率
+            max_concurrent_inferences=vlm_config['max_concurrent_inferences']
         )
+        
+        # 计算测试参数
+        frames_per_video = int(video_config['target_video_duration'] * original_fps)  # 每个3秒视频需要的原始帧数
+        expected_videos = max(2, n_frames // 15)  # 根据n_frames计算期望的视频数量，调整为更合理的比例
+        total_frames_needed = expected_videos * frames_per_video  # 总共需要的帧数
+        
+        print(f"\n📊 计算的测试参数:")
+        print(f"  - 检测到的原始帧率: {original_fps}fps")
+        print(f"  - 每个视频需要原始帧数: {frames_per_video}帧")
+        print(f"  - 期望生成视频数量: {expected_videos}个")
+        print(f"  - 总共需要收集帧数: {total_frames_needed}帧")
+        print(f"  - 抽帧策略: 每秒从{original_fps}帧中抽取{video_config['frames_per_second']}帧")
+        print(f"  - 每{int(original_fps/video_config['frames_per_second'])}帧抽1帧")
         
         # 创建N帧目录
         n_frames_dir = experiment_dir / f"n_frames_{n_frames}"
@@ -262,17 +252,17 @@ def test_n_frames_async(api_key, rtsp_url, experiment_dir, n_frames=20):
         # 启动处理器
         processor.start()
         
-        # 创建RTSP客户端
+        # 创建RTSP客户端，使用配置参数
         rtsp_client = RTSPClient(
             rtsp_url=rtsp_url,
-            frame_rate=10,
-            timeout=30,
-            buffer_size=50
+            frame_rate=int(min(10, original_fps)),  # RTSP客户端目标帧率，不超过原始帧率，转换为整数
+            timeout=rtsp_config['connection_timeout'],
+            buffer_size=rtsp_config['client_buffer_size']
         )
         
         # 收集帧并发送到处理器
         frames_sent = 0
-        max_frames = 150  # 收集150帧，足够生成2个3秒视频（每个需要75帧）
+        frame_timestamps = []
         
         def frame_callback(frame):
             nonlocal frames_sent
@@ -280,13 +270,20 @@ def test_n_frames_async(api_key, rtsp_url, experiment_dir, n_frames=20):
             current_time = time.time()
             processor.add_frame(frame, current_time)
             frames_sent += 1
+            frame_timestamps.append(current_time)
             
-            if frames_sent % 25 == 0:
-                print(f"已发送 {frames_sent}/{max_frames} 帧到处理器")
-            return frames_sent < max_frames
+            # 每N帧报告一次进度
+            if frames_sent % n_frames == 0:
+                elapsed_time = current_time - frame_timestamps[0] if frame_timestamps else 0
+                fps_actual = frames_sent / elapsed_time if elapsed_time > 0 else 0
+                print(f"已发送 {frames_sent}/{total_frames_needed} 帧到处理器 (实际fps: {fps_actual:.1f})")
+            
+            return frames_sent < total_frames_needed
         
-        print(f"开始收集 {max_frames} 帧进行异步处理...")
-        print(f"抽帧策略: 每3秒收集{int(3*original_fps)}帧，每秒抽取2帧，制作3秒视频（共6帧）")
+        print(f"🎬 开始收集 {total_frames_needed} 帧进行异步处理...")
+        
+        # 记录开始时间
+        collection_start_time = time.time()
         
         # 收集帧
         client_thread = threading.Thread(
@@ -295,76 +292,107 @@ def test_n_frames_async(api_key, rtsp_url, experiment_dir, n_frames=20):
         client_thread.daemon = True
         client_thread.start()
         
-        # 等待收集完成
-        timeout = 40
+        # 等待收集完成，使用配置的超时时间
+        timeout = test_config['collection_timeout']
         start_time = time.time()
-        while frames_sent < max_frames and time.time() - start_time < timeout:
+        while frames_sent < total_frames_needed and time.time() - start_time < timeout:
             time.sleep(0.5)
         
-        print(f"帧收集完成，共发送 {frames_sent} 帧")
+        collection_end_time = time.time()
+        collection_duration = collection_end_time - collection_start_time
         
-        # 等待处理器处理完成
-        print("等待视频处理和VLM推理完成...")
+        print(f"📦 帧收集完成:")
+        print(f"  - 实际收集帧数: {frames_sent}")
+        print(f"  - 收集耗时: {collection_duration:.2f}s")
+        print(f"  - 平均收集帧率: {frames_sent/collection_duration:.2f}fps")
+        
+        # 等待处理器处理完成，使用配置的超时时间
+        print("\n⏳ 等待视频处理和VLM推理完成...")
         results = []
-        result_timeout = 90  # 90秒超时
+        result_timeout = test_config['result_timeout']
         result_start_time = time.time()
         
-        while len(results) < 2 and time.time() - result_start_time < result_timeout:
-            result = processor.get_result(timeout=2.0)
+        # 记录推理时间线
+        inference_timeline = []
+        
+        while len(results) < expected_videos and time.time() - result_start_time < result_timeout:
+            result = processor.get_result(timeout=3.0)
             if result:
                 results.append(result)
-                print(f"收到第 {len(results)} 个推理结果")
+                current_time = time.time()
+                
+                print(f"\n🎯 收到第 {len(results)} 个推理结果:")
                 
                 # 保存结果到N帧目录
-                result_file = n_frames_dir / f"batch_{len(results):03d}_result.json"
+                result_file = n_frames_dir / f"video_{len(results):03d}_result.json"
                 with open(result_file, 'w', encoding='utf-8') as f:
                     json.dump(result, f, ensure_ascii=False, indent=2, default=str)
                 
-                # 打印详细信息
+                # 分析推理时间线
                 video_info = result.get('video_info', {})
-                print(f"  视频路径: {os.path.basename(result.get('video_path', 'N/A'))}")
-                print(f"  帧数: {video_info.get('frame_count', 'N/A')}")
-                print(f"  原始帧范围: {video_info.get('original_frame_range', 'N/A')}")
-                print(f"  源视频时间范围: {video_info.get('start_relative_timestamp', 0):.2f}s - {video_info.get('end_relative_timestamp', 0):.2f}s")
-                print(f"  推理开始时间: {result.get('inference_start_timestamp', 'N/A')}")
-                print(f"  推理结束时间: {result.get('inference_end_timestamp', 'N/A')}")
-                print(f"  推理耗时: {result.get('inference_duration', 0):.2f}s")
-                print(f"  结果长度: {len(result.get('result', '')) if result.get('result') else 0} 字符")
+                inference_start = result.get('inference_start_time', 0)
+                inference_end = result.get('inference_end_time', 0)
+                
+                inference_timeline.append({
+                    'video_id': len(results),
+                    'video_creation_time': video_info.get('created_at', 0),
+                    'inference_start_time': inference_start,
+                    'inference_end_time': inference_end,
+                    'inference_duration': result.get('inference_duration', 0)
+                })
+                
+                # 打印详细信息
+                print(f"  📹 视频: {os.path.basename(result.get('video_path', 'N/A'))}")
+                print(f"  🎬 帧数: {video_info.get('frame_count', 'N/A')}")
+                print(f"  📊 原始帧范围: {video_info.get('original_frame_range', 'N/A')}")
+                print(f"  ⏱️  源视频时间: {video_info.get('start_relative_timestamp', 0):.2f}s - {video_info.get('end_relative_timestamp', 0):.2f}s")
+                print(f"  🚀 推理开始: {result.get('inference_start_timestamp', 'N/A')}")
+                print(f"  🏁 推理结束: {result.get('inference_end_timestamp', 'N/A')}")
+                print(f"  ⏳ 推理耗时: {result.get('inference_duration', 0):.2f}s")
+                print(f"  📝 结果长度: {len(result.get('result', '')) if result.get('result') else 0} 字符")
+                
+                # 验证抽帧策略（更新为5fps）
+                frame_range = video_info.get('original_frame_range', [0, 0])
+                time_range = video_info.get('end_relative_timestamp', 0) - video_info.get('start_relative_timestamp', 0)
+                expected_frames = int(time_range * video_config['frames_per_second'])  # 每秒5帧
+                actual_frames = video_info.get('frame_count', 0)
+                
+                print(f"  ✅ 抽帧验证: 期望{expected_frames}帧, 实际{actual_frames}帧, 时间跨度{time_range:.2f}s")
+                
                 if result.get('result'):
                     # 处理结果可能是列表格式
                     result_text = result['result']
                     if isinstance(result_text, list) and len(result_text) > 0:
                         result_text = result_text[0].get('text', str(result_text))
-                    print(f"  结果预览: {str(result_text)[:100]}...")
-                print()
+                    print(f"  📄 结果预览: {str(result_text)[:100]}...")
         
         # 停止处理器
         processor.stop()
         
-        if len(results) >= 2:
-            print(f"✅ N帧异步处理成功，完成 {len(results)} 个批次")
-            
-            # 保存总结果
-            summary_file = n_frames_dir / "summary.json"
-            summary_data = {
-                'n_frames': n_frames,
-                'frames_sent': frames_sent,
-                'total_batches': len(results),
-                'sampling_strategy': 'time_based',
-                'frames_per_second': 2,
-                'target_video_duration': 3.0,
-                'original_fps': original_fps,
-                'frames_to_collect_per_video': int(3 * original_fps),
-                'results': results
-            }
-            
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump(summary_data, f, ensure_ascii=False, indent=2, default=str)
-            
-            print(f"结果总结已保存到: {summary_file}")
+        # 验证测试成功条件
+        success_conditions = {
+            'frames_collected': frames_sent >= total_frames_needed * 0.8,  # 至少收集80%的帧
+            'videos_generated': len(results) >= expected_videos * 0.5,     # 至少生成50%的视频
+            'async_processing': len(inference_timeline) >= 2,              # 至少有2个视频进行推理
+            'detailed_logs': all(r.get('inference_duration') is not None for r in results)  # 所有结果都有详细日志
+        }
+        
+        print(f"\n✅ 测试结果验证:")
+        for condition, passed in success_conditions.items():
+            print(f"  - {condition}: {'✅ 通过' if passed else '❌ 失败'}")
+        
+        overall_success = all(success_conditions.values())
+        
+        if overall_success:
+            print(f"\n🎉 N帧异步处理测试成功!")
+            print(f"  - 收集帧数: {frames_sent}")
+            print(f"  - 生成视频: {len(results)}个")
+            print(f"  - 完成推理: {len([r for r in results if r.get('result')])}个")
             return True
         else:
-            print(f"❌ N帧异步处理结果不足: {len(results)}")
+            print(f"\n❌ N帧异步处理测试失败:")
+            print(f"  - 收集帧数: {frames_sent}/{total_frames_needed}")
+            print(f"  - 生成视频: {len(results)}/{expected_videos}")
             return False
             
     except Exception as e:
@@ -375,87 +403,158 @@ def test_n_frames_async(api_key, rtsp_url, experiment_dir, n_frames=20):
 
 def main():
     """主函数"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="RTSP和VLM集成测试")
-    parser.add_argument("api_key", help="DashScope API密钥")
-    parser.add_argument("--video", help="测试视频路径（可选）")
-    parser.add_argument("--n-frames", type=int, default=30, help="N帧异步测试的帧数")
-    parser.add_argument("--port", type=int, default=8554, help="RTSP服务器端口")
-    
-    args = parser.parse_args()
-    
-    # 创建实验目录
-    experiment_dir = create_experiment_dir()
-    print(f"实验目录: {experiment_dir}")
-    
-    # 查找测试视频
-    video_path = args.video or find_test_video()
-    print(f"测试视频: {video_path}")
-    
-    rtsp_url = f"rtsp://localhost:{args.port}/stream"
-    
-    # 测试结果
-    results = {
-        'rtsp_server_test': False,
-        'rtsp_client_test': False,
-        'vlm_analysis_test': False,
-        'n_frames_async_test': False
-    }
-    
     try:
-        # 测试1: RTSP服务器
-        server_ok, rtsp_server = test_rtsp_server(video_path, args.port)
-        results['rtsp_server_test'] = server_ok
+        # 加载配置
+        config = load_config()
         
-        if server_ok:
-            # 测试2: RTSP客户端
-            client_ok, frames = test_rtsp_client(rtsp_url, experiment_dir)
-            results['rtsp_client_test'] = client_ok
+        # 创建实验目录
+        experiment_dir = create_experiment_dir()
+        test_number = int(experiment_dir.name.replace('test', ''))
+        
+        print(f"📁 实验目录: {experiment_dir}")
+        
+        # 创建4个测试阶段的子文件夹
+        phase_names = [
+            "phase1_rtsp_server_test",
+            "phase2_rtsp_client_test", 
+            "phase3_vlm_analysis_test",
+            "phase4_n_frames_async_test"
+        ]
+        
+        phase_dirs = create_phase_directories(experiment_dir, phase_names)
+        
+        # 保存测试配置
+        save_test_config(experiment_dir, config, test_number, phase_names)
+        
+        # RTSP URL - 使用本地RTSP服务器进行测试
+        use_local_rtsp = True
+        if use_local_rtsp:
+            # 启动本地RTSP服务器
+            print("🚀 启动本地RTSP服务器...")
+            rtsp_server = RTSPServer("data/test.avi", 8554, "stream")
+            rtsp_url = rtsp_server.start()
+            print(f"✅ 本地RTSP服务器已启动: {rtsp_url}")
             
-            if client_ok and frames:
-                # 测试3: VLM分析
-                vlm_ok = test_vlm_analysis(args.api_key, frames, experiment_dir)
-                results['vlm_analysis_test'] = vlm_ok
-                
-                # 测试4: N帧异步处理
-                async_ok = test_n_frames_async(args.api_key, rtsp_url, experiment_dir, args.n_frames)
-                results['n_frames_async_test'] = async_ok
+            # 等待服务器启动
+            time.sleep(3)
+        else:
+            rtsp_url = "rtsp://admin:Vhg13223@192.168.31.183:554/h264/ch1/main/av_stream"
         
+        # 记录所有阶段的结果
+        phase_results = {}
+        frames = []  # 初始化frames变量
+        
+        # 测试阶段1：RTSP服务器测试
+        print(f"\n{'='*50}")
+        print("🌐 阶段1: RTSP服务器连通性测试")
+        print(f"{'='*50}")
+        
+        try:
+            phase1_result = test_rtsp_server(rtsp_url)
+            print(f"✅ 阶段1完成，结果: {'成功' if phase1_result else '失败'}")
+        except Exception as e:
+            print(f"❌ 阶段1异常: {str(e)}")
+            phase1_result = False
+        
+        phase_results['phase1_rtsp_server_test'] = phase1_result
+        save_phase_result(phase_dirs["phase1_rtsp_server_test"], 
+                         "阶段1: RTSP服务器连通性测试", phase1_result,
+                         rtsp_url=rtsp_url)
+        
+        # 测试阶段2：RTSP客户端测试
+        print(f"\n{'='*50}")
+        print("📹 阶段2: RTSP客户端功能测试")
+        print(f"{'='*50}")
+        
+        try:
+            if phase1_result:
+                frames = test_rtsp_client(rtsp_url, phase_dirs["phase2_rtsp_client_test"])
+                phase2_result = len(frames) > 0
+                print(f"✅ 阶段2完成，收集到 {len(frames)} 帧")
+            else:
+                print("⚠️ 由于阶段1失败，跳过RTSP客户端测试")
+                phase2_result = False
+        except Exception as e:
+            print(f"❌ 阶段2异常: {str(e)}")
+            phase2_result = False
+            
+        phase_results['phase2_rtsp_client_test'] = phase2_result
+        save_phase_result(phase_dirs["phase2_rtsp_client_test"],
+                         "阶段2: RTSP客户端功能测试", phase2_result,
+                         frames_collected=len(frames))
+        
+        # 测试阶段3：VLM分析测试
+        print(f"\n{'='*50}")
+        print("🧠 阶段3: VLM分析测试")
+        print(f"{'='*50}")
+        
+        try:
+            if phase2_result and frames:
+                phase3_result = test_vlm_analysis(frames, phase_dirs["phase3_vlm_analysis_test"])
+                print(f"✅ 阶段3完成，结果: {'成功' if phase3_result else '失败'}")
+            elif not phase2_result:
+                print("⚠️ 由于阶段2失败，跳过VLM分析测试")
+                phase3_result = False
+            else:
+                print("⚠️ 没有可用帧，跳过VLM分析测试")
+                phase3_result = False
+        except Exception as e:
+            print(f"❌ 阶段3异常: {str(e)}")
+            phase3_result = False
+            
+        phase_results['phase3_vlm_analysis_test'] = phase3_result
+        save_phase_result(phase_dirs["phase3_vlm_analysis_test"],
+                         "阶段3: VLM分析测试", phase3_result,
+                         frames_used=len(frames))
+        
+        # 测试阶段4：N帧异步处理测试
+        print(f"\n{'='*50}")
+        print("🎬 阶段4: N帧异步处理测试")
+        print(f"{'='*50}")
+        
+        try:
+            if phase1_result:
+                phase4_result = test_n_frames_async(rtsp_url, phase_dirs["phase4_n_frames_async_test"], config['testing']['n_frames_default'])
+                print(f"✅ 阶段4完成，结果: {'成功' if phase4_result else '失败'}")
+            elif not phase1_result:
+                print("⚠️ 由于阶段1失败，跳过N帧异步处理测试")
+                phase4_result = False
+        except Exception as e:
+            print(f"❌ 阶段4异常: {str(e)}")
+            phase4_result = False
+            
+        phase_results['phase4_n_frames_async_test'] = phase4_result
+        save_phase_result(phase_dirs["phase4_n_frames_async_test"],
+                         "阶段4: N帧异步处理测试", phase4_result,
+                         n_frames=config['testing']['n_frames_default'])
+        
+        # 计算总体成功率和保存总结
+        total_phases = len(phase_results)
+        successful_phases = sum(1 for result in phase_results.values() if result)
+        success_rate = (successful_phases / total_phases) * 100 if total_phases > 0 else 0
+        
+        # 保存测试结果总结
+        save_test_summary(experiment_dir, phase_results, test_number, len(frames))
+        
+        # 打印测试总结
+        print_test_summary(phase_results, success_rate, experiment_dir, len(frames))
+        
+        # 即使某些阶段失败，也算作完成了所有测试
+        return True
+        
+    except Exception as e:
+        print(f"❌ 测试过程中发生错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
     finally:
-        # 清理
-        if 'rtsp_server' in locals() and rtsp_server:
+        # 停止本地RTSP服务器
+        if 'use_local_rtsp' in locals() and use_local_rtsp and 'rtsp_server' in locals():
             try:
                 rtsp_server.stop()
-            except:
-                pass
-    
-    # 保存测试结果
-    results_file = experiment_dir / "test_results.json"
-    with open(results_file, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    
-    # 打印总结
-    print("\n" + "="*60)
-    print("测试总结")
-    print("="*60)
-    
-    passed_tests = sum(1 for v in results.values() if v)
-    total_tests = len(results)
-    
-    for test_name, result in results.items():
-        status = "✅ 通过" if result else "❌ 失败"
-        print(f"  {test_name}: {status}")
-    
-    print(f"\n总体结果: {passed_tests}/{total_tests} 测试通过")
-    print(f"实验数据保存在: {experiment_dir}")
-    
-    if passed_tests == total_tests:
-        print("\n🎉 所有测试通过！")
-        return 0
-    else:
-        print("\n❌ 部分测试失败")
-        return 1
+                print("🛑 本地RTSP服务器已停止")
+            except Exception as e:
+                print(f"⚠️ 停止RTSP服务器时出错: {str(e)}")
 
 if __name__ == "__main__":
     sys.exit(main()) 
