@@ -5,6 +5,25 @@
     "target_frames_per_video": 15,
     "comment": "从原始帧率中每秒抽取5帧，3秒视频共15帧"
   },
+  "stream": {
+    "type": "tcp",
+    "comment": "流媒体类型: 'rtsp' 或 'tcp'",
+    "rtsp": {
+      "url": "rtsp://admin:Vhg13223@192.168.31.183:554/h264/ch1/main/av_stream",
+      "use_local_server": true,
+      "local_server": {
+        "video_file": "data/test.avi",
+        "port": 8554,
+        "stream_name": "stream"
+      }
+    },
+    "tcp": {
+      "host": "localhost",
+      "port": 9999,
+      "video_file": "data/test_fixed.mp4",
+      "fps": 25.0
+    }
+  },
   "rtsp": {
     "default_fps": 25.0,
     "auto_detect_fps": true,
@@ -24,6 +43,14 @@
       "user_template": "请分析这段视频并以JSON格式回复，包含以下信息：\n{\n  \"timestamp\": \"当前时间(ISO格式)\",\n  \"people_count\": 人数,\n  \"people\": [\n    {\n      \"id\": 人员编号,\n      \"bbox\": [x, y, width, height],\n      \"activity\": \"正在做什么\"\n    }\n  ],\n  \"summary\": \"一句话概括场景\"\n}\n\n要求：\n1. 如果没有人，people_count为0，people为空数组\n2. bbox坐标为相对坐标(0-1之间)\n3. 回复要简洁，activity用简短词语描述\n4. 只返回JSON，不要其他文字"
     },
     "comment": "VLM推理相关配置，包含API密钥、模型、并发数等"
+  },
+  "monitoring": {
+    "output_dir": "tmp",
+    "save_frames": true,
+    "save_videos": true,
+    "save_results": true,
+    "log_level": "INFO",
+    "comment": "监控输出配置"
   },
   "testing": {
     "n_frames_default": 50,

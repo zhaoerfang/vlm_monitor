@@ -320,6 +320,9 @@ class AsyncVideoProcessor:
             self.experiment_log.append(result_data.copy())
             self.total_inferences_completed += 1
             
+            # 保存推理结果到视频详情文件夹
+            self._save_inference_result_to_details(result_data)
+            
             try:
                 self.result_queue.put(result_data, timeout=1)
                 logger.info(f"异步推理结果已入队: {os.path.basename(video_info['video_path'])}")
@@ -616,4 +619,64 @@ class AsyncVideoProcessor:
         """创建临时视频文件路径"""
         timestamp = int(time.time() * 1000)
         filename = f"sampled_video_{timestamp}.mp4"
-        return os.path.join(self.temp_dir, filename) 
+        return os.path.join(self.temp_dir, filename)
+
+    def _save_inference_result_to_details(self, result_data: Dict):
+        """保存推理结果到视频详情文件夹"""
+        try:
+            # 提取视频信息和推理结果
+            video_info = result_data.get('video_info', {})
+            details_dir = video_info.get('details_dir')
+            
+            if not details_dir or not os.path.exists(details_dir):
+                logger.warning(f"视频详情目录不存在: {details_dir}")
+                return
+            
+            # 创建推理结果文件路径
+            inference_result_file = os.path.join(details_dir, 'inference_result.json')
+            
+            # 准备要保存的推理结果数据
+            inference_data = {
+                'video_path': result_data['video_path'],
+                'inference_start_time': result_data['inference_start_time'],
+                'inference_end_time': result_data['inference_end_time'],
+                'inference_start_timestamp': result_data['inference_start_timestamp'],
+                'inference_end_timestamp': result_data['inference_end_timestamp'],
+                'inference_duration': result_data['inference_duration'],
+                'result_received_at': result_data['result_received_at'],
+                'raw_result': result_data['result']  # 原始结果字符串
+            }
+            
+            # 尝试解析JSON结果
+            try:
+                result_text = result_data['result']
+                if result_text:
+                    # 如果结果包含```json标记，提取JSON部分
+                    if '```json' in result_text:
+                        start_idx = result_text.find('```json') + 7
+                        end_idx = result_text.find('```', start_idx)
+                        if end_idx > start_idx:
+                            json_text = result_text[start_idx:end_idx].strip()
+                        else:
+                            json_text = result_text
+                    else:
+                        json_text = result_text.strip()
+                    
+                    # 尝试解析JSON
+                    import json
+                    parsed_result = json.loads(json_text)
+                    inference_data['parsed_result'] = parsed_result
+                    logger.debug(f"成功解析推理结果JSON")
+                    
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"无法解析推理结果为JSON: {str(e)}")
+                inference_data['parse_error'] = str(e)
+            
+            # 保存推理结果到文件
+            with open(inference_result_file, 'w', encoding='utf-8') as f:
+                json.dump(inference_data, f, ensure_ascii=False, indent=2, default=str)
+            
+            logger.info(f"推理结果已保存到: {inference_result_file}")
+            
+        except Exception as e:
+            logger.error(f"保存推理结果失败: {str(e)}") 

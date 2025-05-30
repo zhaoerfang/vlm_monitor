@@ -5,20 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "monitor"
 version = "0.1.0"
-description = "VLM Video Monitoring System"
-requires-python = ">=3.7"
+description = "VLM视频监控系统 - 支持RTSP和TCP流媒体的智能视频分析"
+requires-python = ">=3.8"
 dependencies = [
-    "opencv-python",
-    "requests",
-    "numpy"
+    "opencv-python>=4.5.0",
+    "numpy>=1.20.0",
+    "openai>=1.0.0",
 ]
 
 [project.scripts]
-monitor = "monitor.main:main"
+vlm-monitor = "monitor.main:main"
 
-[tool.setuptools]
-packages = ["monitor"]
-package-dir = {"monitor" = "src"}
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pylsp-mypy]
 enabled = true
