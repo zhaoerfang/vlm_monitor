@@ -1,8 +1,8 @@
 {
   "video_processing": {
     "target_video_duration": 3.0,
-    "frames_per_second": 5,
-    "target_frames_per_video": 15,
+    "frames_per_second": 1,
+    "target_frames_per_video": 3,
     "comment": "从原始帧率中每秒抽取5帧，3秒视频共15帧"
   },
   "stream": {
@@ -21,7 +21,11 @@
       "host": "localhost",
       "port": 9999,
       "video_file": "data/test_fixed.mp4",
-      "fps": 25.0
+      "fps": 25.0,
+      "auto_detect_fps": true,
+      "connection_timeout": 10,
+      "client_buffer_size": 100,
+      "comment": "TCP流处理配置，auto_detect_fps启用时会自动检测真实帧率"
     }
   },
   "rtsp": {

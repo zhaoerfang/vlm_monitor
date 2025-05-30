@@ -24,6 +24,7 @@ from monitor.rtsp.rtsp_client import RTSPClient
 from monitor.rtsp.rtsp_utils import detect_rtsp_fps
 from monitor.tcp.tcp_video_server import TCPVideoServer
 from monitor.tcp.tcp_client import TCPVideoClient
+from monitor.tcp.tcp_utils import create_tcp_client_config, detect_tcp_fps
 from monitor.vlm.vlm_client import DashScopeVLMClient
 from monitor.vlm.async_video_processor import AsyncVideoProcessor
 
@@ -33,7 +34,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('vlm_monitor.log')
+        logging.FileHandler('logs/vlm_monitor.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -109,7 +110,9 @@ class VLMMonitor:
                     # 检测RTSP流帧率
                     original_fps = detect_rtsp_fps(stream_config['rtsp']['url'], self.config)
             else:  # TCP
-                original_fps = stream_config['tcp']['fps']
+                # 对于TCP流，使用动态检测的帧率
+                tcp_config = stream_config['tcp']
+                original_fps = detect_tcp_fps(tcp_config['host'], tcp_config['port'], self.config)
             
             self.processor = AsyncVideoProcessor(
                 vlm_client=self.vlm_client,
@@ -175,16 +178,23 @@ class VLMMonitor:
             # 不再启动内置TCP服务器，假设外部TCP服务器已经运行
             logger.info(f"连接到外部TCP视频服务器: {tcp_config['host']}:{tcp_config['port']}")
             
-            # 创建TCP客户端
-            self.stream_client = TCPVideoClient(
+            # 创建TCP客户端配置（包含动态帧率检测）
+            client_config = create_tcp_client_config(
                 host=tcp_config['host'],
                 port=tcp_config['port'],
-                frame_rate=5,  # 客户端目标帧率
-                timeout=10,
-                buffer_size=100
+                config=self.config
             )
             
-            logger.info(f"✅ TCP客户端已创建")
+            # 创建TCP客户端
+            self.stream_client = TCPVideoClient(
+                host=client_config['host'],
+                port=client_config['port'],
+                frame_rate=int(client_config['frame_rate']),  # 使用动态检测的帧率
+                timeout=client_config['timeout'],
+                buffer_size=client_config['buffer_size']
+            )
+            
+            logger.info(f"✅ TCP客户端已创建，使用帧率: {client_config['frame_rate']:.2f}fps")
             return True
             
         except Exception as e:
