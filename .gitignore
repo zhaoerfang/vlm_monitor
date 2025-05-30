@@ -144,4 +144,10 @@ experiments/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# Large video files and test data
+*.avi
+*.mp4
+data/test.*
+data/segments/ 
