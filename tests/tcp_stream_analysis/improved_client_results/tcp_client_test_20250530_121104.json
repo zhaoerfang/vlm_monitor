@@ -1,0 +1,575 @@
+{
+  "test_info": {
+    "timestamp": "2025-05-30T12:11:04.575062",
+    "host": "localhost",
+    "port": 1234,
+    "max_frames": 30,
+    "timeout": 20,
+    "collection_time": 3.0065314769744873
+  },
+  "client_stats": {
+    "connected": false,
+    "frames_received": 29,
+    "bytes_received": 27550207,
+    "elapsed_time": 3.005258083343506,
+    "average_fps": 9.649753597114026,
+    "target_fps": 10,
+    "decode_errors": 0,
+    "resize_count": 30,
+    "resize_enabled": true,
+    "target_resolution": "640x360"
+  },
+  "frames_info": [
+    {
+      "frame_number": 1,
+      "timestamp": 1748578261.6390066,
+      "timestamp_iso": "2025-05-30T12:11:01.639007",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 2,
+      "timestamp": 1748578261.739462,
+      "timestamp_iso": "2025-05-30T12:11:01.739462",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 3,
+      "timestamp": 1748578261.8400102,
+      "timestamp_iso": "2025-05-30T12:11:01.840010",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 4,
+      "timestamp": 1748578261.940553,
+      "timestamp_iso": "2025-05-30T12:11:01.940553",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 5,
+      "timestamp": 1748578262.0411787,
+      "timestamp_iso": "2025-05-30T12:11:02.041179",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 6,
+      "timestamp": 1748578262.1418574,
+      "timestamp_iso": "2025-05-30T12:11:02.141857",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 7,
+      "timestamp": 1748578262.2423034,
+      "timestamp_iso": "2025-05-30T12:11:02.242303",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 8,
+      "timestamp": 1748578262.3427374,
+      "timestamp_iso": "2025-05-30T12:11:02.342737",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 9,
+      "timestamp": 1748578262.4431129,
+      "timestamp_iso": "2025-05-30T12:11:02.443113",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 10,
+      "timestamp": 1748578262.5437117,
+      "timestamp_iso": "2025-05-30T12:11:02.543712",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 11,
+      "timestamp": 1748578262.6442196,
+      "timestamp_iso": "2025-05-30T12:11:02.644220",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 12,
+      "timestamp": 1748578262.7446446,
+      "timestamp_iso": "2025-05-30T12:11:02.744645",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 13,
+      "timestamp": 1748578262.8450365,
+      "timestamp_iso": "2025-05-30T12:11:02.845037",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 14,
+      "timestamp": 1748578262.945447,
+      "timestamp_iso": "2025-05-30T12:11:02.945447",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 15,
+      "timestamp": 1748578263.045873,
+      "timestamp_iso": "2025-05-30T12:11:03.045873",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 16,
+      "timestamp": 1748578263.1463726,
+      "timestamp_iso": "2025-05-30T12:11:03.146373",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 17,
+      "timestamp": 1748578263.247824,
+      "timestamp_iso": "2025-05-30T12:11:03.247824",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 18,
+      "timestamp": 1748578263.3482575,
+      "timestamp_iso": "2025-05-30T12:11:03.348258",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 19,
+      "timestamp": 1748578263.4486926,
+      "timestamp_iso": "2025-05-30T12:11:03.448693",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 20,
+      "timestamp": 1748578263.549162,
+      "timestamp_iso": "2025-05-30T12:11:03.549162",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 21,
+      "timestamp": 1748578263.649668,
+      "timestamp_iso": "2025-05-30T12:11:03.649668",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 22,
+      "timestamp": 1748578263.750151,
+      "timestamp_iso": "2025-05-30T12:11:03.750151",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 23,
+      "timestamp": 1748578263.8506043,
+      "timestamp_iso": "2025-05-30T12:11:03.850604",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 24,
+      "timestamp": 1748578263.95104,
+      "timestamp_iso": "2025-05-30T12:11:03.951040",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 25,
+      "timestamp": 1748578264.0514653,
+      "timestamp_iso": "2025-05-30T12:11:04.051465",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 26,
+      "timestamp": 1748578264.1519964,
+      "timestamp_iso": "2025-05-30T12:11:04.151996",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 27,
+      "timestamp": 1748578264.252428,
+      "timestamp_iso": "2025-05-30T12:11:04.252428",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 28,
+      "timestamp": 1748578264.3528597,
+      "timestamp_iso": "2025-05-30T12:11:04.352860",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 29,
+      "timestamp": 1748578264.4532905,
+      "timestamp_iso": "2025-05-30T12:11:04.453290",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    },
+    {
+      "frame_number": 30,
+      "timestamp": 1748578264.553772,
+      "timestamp_iso": "2025-05-30T12:11:04.553772",
+      "valid": true,
+      "width": 640,
+      "height": 360,
+      "channels": 3,
+      "resolution": "640x360",
+      "size_bytes": 691200,
+      "size_mb": 0.6591796875,
+      "dtype": "uint8",
+      "shape": [
+        360,
+        640,
+        3
+      ]
+    }
+  ],
+  "resolutions": [
+    "640x360"
+  ],
+  "summary": {
+    "total_frames": 30,
+    "average_fps": 9.649753597114026,
+    "average_frame_size_mb": 0.6591796875,
+    "total_data_mb": 26.273924827575684,
+    "decode_errors": 0,
+    "resize_count": 30
+  }
+}

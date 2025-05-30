@@ -3,7 +3,12 @@
     "target_video_duration": 3.0,
     "frames_per_second": 1,
     "target_frames_per_video": 3,
-    "comment": "从原始帧率中每秒抽取5帧，3秒视频共15帧"
+    "enable_frame_resize": true,
+    "target_width": 640,
+    "target_height": 360,
+    "max_frame_size_mb": 5.0,
+    "maintain_aspect_ratio": true,
+    "comment": "从原始帧率中每秒抽取5帧，3秒视频共15帧。图像缩放配置：enable_frame_resize启用缩放，target_width/height为目标尺寸，max_frame_size_mb为单帧最大大小限制"
   },
   "stream": {
     "type": "tcp",
@@ -19,7 +24,7 @@
     },
     "tcp": {
       "host": "localhost",
-      "port": 9999,
+      "port": 1234,
       "video_file": "data/test_fixed.mp4",
       "fps": 25.0,
       "auto_detect_fps": true,

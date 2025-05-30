@@ -10,6 +10,8 @@ import time
 import pickle
 import struct
 import logging
+import cv2
+import numpy as np
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ class TCPVideoClient:
         self.frames_received = 0
         self.bytes_received = 0
         self.start_time = None
+        self.decode_errors = 0
         
         # 线程控制
         self.running = False
@@ -109,8 +112,8 @@ class TCPVideoClient:
         try:
             while self.running:
                 # 接收帧数据
-                frame_data = self._receive_frame()
-                if frame_data is None:
+                frame = self._receive_frame()
+                if frame is None:
                     logger.warning("接收帧失败，停止客户端")
                     break
                 
@@ -123,7 +126,7 @@ class TCPVideoClient:
                 
                 # 调用回调函数
                 try:
-                    should_continue = callback(frame_data['frame'])
+                    should_continue = callback(frame)
                     if not should_continue:
                         logger.info("回调函数返回False，停止接收")
                         break
@@ -139,6 +142,8 @@ class TCPVideoClient:
                     elapsed_time = time.time() - (self.start_time or time.time())
                     actual_fps = self.frames_received / elapsed_time if elapsed_time > 0 else 0
                     logger.debug(f"已接收 {self.frames_received} 帧, 实际fps: {actual_fps:.2f}")
+                    if self.decode_errors > 0:
+                        logger.debug(f"解码错误: {self.decode_errors}")
             
             return True
             
@@ -148,8 +153,56 @@ class TCPVideoClient:
         finally:
             self.disconnect()
 
-    def _receive_frame(self) -> Optional[Dict[str, Any]]:
-        """接收单个视频帧"""
+    def _receive_frame(self) -> Optional[np.ndarray]:
+        """接收单个视频帧（新格式：8字节长度 + JPEG数据）"""
+        try:
+            # 接收数据长度（8字节，小端序）
+            length_bytes = self._receive_exact(8)
+            if not length_bytes:
+                return None
+            
+            # 解析长度（小端序无符号长整数）
+            length = struct.unpack('<Q', length_bytes)[0]
+            
+            # 验证数据长度合理性
+            if length > 100 * 1024 * 1024:  # 100MB限制
+                logger.error(f"数据长度异常: {length} bytes")
+                return None
+            
+            if length == 0:
+                logger.warning("数据长度为0")
+                return None
+            
+            # 接收JPEG数据
+            jpeg_data = self._receive_exact(int(length))
+            if not jpeg_data:
+                return None
+            
+            # 解码JPEG数据为图像
+            try:
+                data = np.frombuffer(jpeg_data, dtype='uint8')
+                frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                
+                if frame is None:
+                    logger.error("JPEG解码失败")
+                    self.decode_errors += 1
+                    return None
+                
+                self.bytes_received += len(jpeg_data) + 8
+                return frame
+                
+            except Exception as e:
+                logger.error(f"图像解码失败: {str(e)}")
+                self.decode_errors += 1
+                return None
+                
+        except Exception as e:
+            if self.running:
+                logger.error(f"接收帧失败: {str(e)}")
+            return None
+
+    def _receive_frame_legacy(self) -> Optional[Dict[str, Any]]:
+        """接收单个视频帧（旧格式：4字节长度 + pickle数据）"""
         try:
             # 接收帧大小（4字节）
             size_data = self._receive_exact(4)
@@ -212,5 +265,6 @@ class TCPVideoClient:
             'bytes_received': self.bytes_received,
             'elapsed_time': elapsed_time,
             'average_fps': self.frames_received / elapsed_time if elapsed_time > 0 else 0,
-            'target_fps': self.frame_rate
+            'target_fps': self.frame_rate,
+            'decode_errors': self.decode_errors
         } 

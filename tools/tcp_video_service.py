@@ -22,7 +22,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('log/tcp_video_service.log')
+        logging.FileHandler('logs/tcp_video_service.log')
     ]
 )
 logger = logging.getLogger(__name__)

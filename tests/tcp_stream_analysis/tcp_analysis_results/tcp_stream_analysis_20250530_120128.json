@@ -1,0 +1,18 @@
+{
+  "connection_info": {
+    "host": "localhost",
+    "port": 1234,
+    "start_time": "2025-05-30T12:01:28.105448",
+    "start_timestamp": 1748577688.1054413,
+    "total_analysis_time": 0.04074358940124512,
+    "end_time": "2025-05-30T12:01:28.146192"
+  },
+  "frame_info": {
+    "first_frame_size": 1515458304
+  },
+  "stream_stats": {},
+  "error_info": {
+    "raw_connection_failed": "Frame size too large: 1515458304 bytes"
+  },
+  "sample_frames": []
+}

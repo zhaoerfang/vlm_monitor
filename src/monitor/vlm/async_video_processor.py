@@ -20,6 +20,7 @@ import logging
 
 from .vlm_client import DashScopeVLMClient
 from ..core.config import load_config
+from ..utils.image_utils import smart_resize_frame, validate_frame, get_frame_info
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,13 @@ class AsyncVideoProcessor:
         # 并发控制
         self.max_concurrent_inferences = max_concurrent_inferences or vlm_config.get('max_concurrent_inferences', 3)
         
+        # 图像缩放配置（完全从配置文件读取）
+        self.enable_frame_resize = video_config.get('enable_frame_resize', True)
+        self.target_width = video_config.get('target_width', 640)
+        self.target_height = video_config.get('target_height', 360)
+        self.max_frame_size_mb = video_config.get('max_frame_size_mb', 5.0)
+        self.maintain_aspect_ratio = video_config.get('maintain_aspect_ratio', True)
+        
         # 缓冲区和队列
         self.frame_buffer = []
         self.frame_queue = queue.Queue(maxsize=100)
@@ -82,6 +90,8 @@ class AsyncVideoProcessor:
         self.total_inferences_started = 0
         self.total_inferences_completed = 0
         self.start_time = None
+        self.frames_resized = 0
+        self.frames_invalid = 0
         
         # 实验日志
         self.experiment_log = []
@@ -94,6 +104,12 @@ class AsyncVideoProcessor:
         logger.info(f"  - 抽帧间隔: 每{self.frames_per_interval:.1f}帧抽1帧")
         logger.info(f"  - 每个视频收集原始帧数: {self.frames_to_collect_per_video}帧")
         logger.info(f"  - 最大并发推理数: {self.max_concurrent_inferences}")
+        if self.enable_frame_resize:
+            logger.info(f"  - 帧缩放已启用: 目标尺寸 {self.target_width}x{self.target_height}")
+            logger.info(f"    * 最大帧大小: {self.max_frame_size_mb}MB")
+            logger.info(f"    * 保持宽高比: {self.maintain_aspect_ratio}")
+        else:
+            logger.info(f"  - 帧缩放已禁用")
 
     def start(self):
         """启动异步处理"""
@@ -157,20 +173,56 @@ class AsyncVideoProcessor:
     def add_frame(self, frame, timestamp: Optional[float] = None):
         """添加帧到处理队列"""
         try:
+            # 验证帧有效性
+            if not validate_frame(frame):
+                logger.warning("接收到无效帧，跳过")
+                self.frames_invalid += 1
+                return
+            
+            # 获取帧信息
+            frame_info = get_frame_info(frame)
+            logger.debug(f"接收帧: {frame_info['resolution']}, {frame_info['size_mb']:.2f}MB")
+            
+            # 应用图像缩放（如果启用）
+            processed_frame = frame
+            if self.enable_frame_resize:
+                resized_frame = smart_resize_frame(
+                    frame, 
+                    target_width=self.target_width,
+                    target_height=self.target_height,
+                    max_size_mb=self.max_frame_size_mb,
+                    maintain_aspect_ratio=self.maintain_aspect_ratio
+                )
+                if resized_frame is not None:
+                    processed_frame = resized_frame
+                    self.frames_resized += 1
+                    
+                    # 记录缩放信息
+                    new_info = get_frame_info(processed_frame)
+                    logger.debug(f"帧已缩放: {frame_info['resolution']} -> {new_info['resolution']}, "
+                               f"{frame_info['size_mb']:.2f}MB -> {new_info['size_mb']:.2f}MB")
+            
             frame_data = {
-                'frame': frame,
+                'frame': processed_frame,
                 'timestamp': timestamp or time.time(),
                 'frame_number': self.total_frames_received + 1,
-                'relative_timestamp': (timestamp or time.time()) - (self.start_time or time.time())
+                'relative_timestamp': (timestamp or time.time()) - (self.start_time or time.time()),
+                'original_info': frame_info,
+                'processed_info': get_frame_info(processed_frame) if processed_frame is not frame else frame_info,
+                'was_resized': processed_frame is not frame
             }
+            
             self.frame_queue.put(frame_data, timeout=1)
             self.total_frames_received += 1
             
             if self.total_frames_received % 50 == 0:
-                logger.info(f"已接收 {self.total_frames_received} 帧")
+                logger.info(f"已接收 {self.total_frames_received} 帧 "
+                          f"(缩放: {self.frames_resized}, 无效: {self.frames_invalid})")
                 
         except queue.Full:
             logger.warning("帧队列已满，丢弃帧")
+        except Exception as e:
+            logger.error(f"添加帧失败: {str(e)}")
 
     def get_result(self, timeout: float = 1.0) -> Optional[Dict]:
         """获取推理结果"""
