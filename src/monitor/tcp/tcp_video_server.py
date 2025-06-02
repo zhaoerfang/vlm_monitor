@@ -185,28 +185,28 @@ class TCPVideoServer:
                     self.current_frame += 1
                     frame_count += 1
                     
-                    # 序列化帧数据
-                    frame_data = {
-                        'frame': frame,
-                        'timestamp': time.time(),
-                        'frame_number': self.current_frame,
-                        'total_frames': self.total_frames if self.total_frames > 0 else frame_count
-                    }
-                    
-                    # 使用pickle序列化
+                    # 将帧编码为JPEG格式
                     try:
-                        serialized_data = pickle.dumps(frame_data)
-                        frame_size = len(serialized_data)
+                        # 编码为JPEG
+                        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]  # JPEG质量90%
+                        ret, jpeg_data = cv2.imencode('.jpg', frame, encode_param)
+                        
+                        if not ret or jpeg_data is None:
+                            logger.error("JPEG编码失败")
+                            continue
+                        
+                        jpeg_bytes = jpeg_data.tobytes()
+                        data_length = len(jpeg_bytes)
                         
                         # 发送给所有连接的客户端
                         with self.clients_lock:
                             disconnected_clients = []
                             for client_socket in self.clients[:]:
                                 try:
-                                    # 发送帧大小（4字节）
-                                    client_socket.sendall(struct.pack('!I', frame_size))
-                                    # 发送帧数据
-                                    client_socket.sendall(serialized_data)
+                                    # 发送数据长度（8字节，小端序）
+                                    client_socket.sendall(struct.pack('<Q', data_length))
+                                    # 发送JPEG数据
+                                    client_socket.sendall(jpeg_bytes)
                                 except Exception as e:
                                     logger.warning(f"发送帧到客户端失败: {str(e)}")
                                     disconnected_clients.append(client_socket)
@@ -224,7 +224,7 @@ class TCPVideoServer:
                                 logger.info(f"移除 {len(disconnected_clients)} 个断开的客户端，剩余: {len(self.clients)}")
                     
                     except Exception as e:
-                        logger.error(f"序列化帧数据失败: {str(e)}")
+                        logger.error(f"编码帧数据失败: {str(e)}")
                         continue
                     
                     # 控制帧率

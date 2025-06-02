@@ -201,40 +201,6 @@ class TCPVideoClient:
                 logger.error(f"接收帧失败: {str(e)}")
             return None
 
-    def _receive_frame_legacy(self) -> Optional[Dict[str, Any]]:
-        """接收单个视频帧（旧格式：4字节长度 + pickle数据）"""
-        try:
-            # 接收帧大小（4字节）
-            size_data = self._receive_exact(4)
-            if not size_data:
-                return None
-            
-            frame_size = struct.unpack('!I', size_data)[0]
-            
-            # 验证帧大小合理性
-            if frame_size > 50 * 1024 * 1024:  # 50MB限制
-                logger.error(f"帧大小异常: {frame_size} bytes")
-                return None
-            
-            # 接收帧数据
-            frame_data = self._receive_exact(frame_size)
-            if not frame_data:
-                return None
-            
-            # 反序列化帧数据
-            try:
-                frame_info = pickle.loads(frame_data)
-                self.bytes_received += len(frame_data) + 4
-                return frame_info
-            except Exception as e:
-                logger.error(f"反序列化帧数据失败: {str(e)}")
-                return None
-                
-        except Exception as e:
-            if self.running:
-                logger.error(f"接收帧失败: {str(e)}")
-            return None
-
     def _receive_exact(self, size: int) -> Optional[bytes]:
         """精确接收指定字节数的数据"""
         data = b''

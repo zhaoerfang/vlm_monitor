@@ -145,7 +145,7 @@ def create_video_from_frames(frames: List, output_path: Path, fps: int = 10) -> 
         
     try:
         height, width = frames[0].shape[:2]
-        fourcc = cv2.VideoWriter.fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter.fourcc(*'avc1')
         writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
         
         for frame in frames:

@@ -25,7 +25,7 @@
     "tcp": {
       "host": "localhost",
       "port": 1234,
-      "video_file": "data/test_fixed.mp4",
+      "video_file": "/Users/foxiwift/Downloads/videoplayback.mp4",
       "fps": 25.0,
       "auto_detect_fps": true,
       "connection_timeout": 10,
@@ -43,8 +43,8 @@
   "vlm": {
     "api_key": "sk-88c79b5d716645f39a44b0e5ce2d4541",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "qwen-vl-max-latest",
-    "max_concurrent_inferences": 3,
+    "model": "qwen-vl-max",
+    "max_concurrent_inferences": 1000,
     "max_video_size_mb": 100,
     "max_base64_size_mb": 10,
     "default_prompt": {

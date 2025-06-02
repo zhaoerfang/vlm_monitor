@@ -705,7 +705,7 @@ class AsyncVideoProcessor:
             
             # 创建视频写入器，使用目标帧率
             output_fps = self.frames_per_second  # 输出视频的帧率等于每秒抽取的帧数
-            fourcc = cv2.VideoWriter.fourcc(*'mp4v')
+            fourcc = cv2.VideoWriter.fourcc(*'avc1')  # 使用H.264编码，更好的浏览器兼容性
             writer = cv2.VideoWriter(video_path, fourcc, output_fps, (width, height))
             
             # 写入所有帧
