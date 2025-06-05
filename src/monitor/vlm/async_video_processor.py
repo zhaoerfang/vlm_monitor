@@ -57,6 +57,11 @@ class AsyncVideoProcessor:
         self.target_frames_per_video = int(self.target_video_duration * self.frames_per_second)
         self.frames_per_interval = int(self.original_fps / self.frames_per_second)
         
+        # 检测图像模式：当target_video_duration、frames_per_second、target_frames_per_video都为1时
+        self.image_mode = (self.target_video_duration == 1.0 and 
+                          self.frames_per_second == 1 and 
+                          self.target_frames_per_video == 1)
+        
         # 计算需要收集的总帧数（3秒的原始帧数）
         self.frames_to_collect_per_video = int(self.target_video_duration * self.original_fps)
         
@@ -87,6 +92,7 @@ class AsyncVideoProcessor:
         # 统计信息
         self.total_frames_received = 0
         self.total_videos_created = 0
+        self.total_images_created = 0  # 新增：图像计数
         self.total_inferences_started = 0
         self.total_inferences_completed = 0
         self.start_time = None
@@ -97,12 +103,18 @@ class AsyncVideoProcessor:
         self.experiment_log = []
         
         logger.info(f"异步视频处理器初始化:")
-        logger.info(f"  - 目标视频时长: {self.target_video_duration}s")
+        if self.image_mode:
+            logger.info(f"  - 🖼️ 图像模式已启用（每帧单独推理）")
+            logger.info(f"  - 每帧推理间隔: 每{self.frames_per_interval:.1f}帧抽1帧")
+        else:
+            logger.info(f"  - 🎬 视频模式（批量帧推理）")
+            logger.info(f"  - 目标视频时长: {self.target_video_duration}s")
+            logger.info(f"  - 每个视频总帧数: {self.target_frames_per_video}帧")
+            logger.info(f"  - 每个视频收集原始帧数: {self.frames_to_collect_per_video}帧")
+        
         logger.info(f"  - 每秒抽帧数: {self.frames_per_second}帧")
         logger.info(f"  - 原始帧率: {self.original_fps}fps")
-        logger.info(f"  - 每个视频总帧数: {self.target_frames_per_video}帧")
         logger.info(f"  - 抽帧间隔: 每{self.frames_per_interval:.1f}帧抽1帧")
-        logger.info(f"  - 每个视频收集原始帧数: {self.frames_to_collect_per_video}帧")
         logger.info(f"  - 最大并发推理数: {self.max_concurrent_inferences}")
         if self.enable_frame_resize:
             logger.info(f"  - 帧缩放已启用: 目标尺寸 {self.target_width}x{self.target_height}")
@@ -327,39 +339,54 @@ class AsyncVideoProcessor:
             else:
                 logger.warning("推理任务提交失败，原因未知")
 
-    async def _inference_worker_async(self, video_info: Dict):
+    async def _inference_worker_async(self, media_info: Dict):
         """真正的异步推理工作函数"""
         try:
             # 记录推理开始时间
             inference_start_time = time.time()
             inference_start_timestamp = datetime.now().isoformat()
             
-            logger.info(f"开始异步VLM推理: {os.path.basename(video_info['video_path'])}")
-            logger.info(f"  - 推理开始时间: {inference_start_timestamp}")
-            logger.info(f"  - 源视频时间范围: {video_info['start_relative_timestamp']:.2f}s - {video_info['end_relative_timestamp']:.2f}s")
+            media_type = media_info.get('media_type', 'video')
+            media_path = media_info.get('media_path', media_info.get('video_path', media_info.get('image_path')))
             
-            # 执行异步推理
-            result = await self.vlm_client.analyze_video_async(
-                video_info['video_path'], 
-                prompt=None,  # 使用配置文件中的默认提示词
-                fps=2
-            )
+            logger.info(f"开始异步VLM推理: {os.path.basename(media_path)} ({media_type})")
+            logger.info(f"  - 推理开始时间: {inference_start_timestamp}")
+            
+            if media_type == 'image':
+                logger.info(f"  - 图像帧号: {media_info.get('frame_number', 'N/A')}")
+                logger.info(f"  - 图像时间戳: {media_info.get('relative_timestamp', 'N/A'):.2f}s")
+                
+                # 执行异步图像推理
+                result = await self.vlm_client.analyze_image_async(
+                    media_path, 
+                    prompt=None  # 使用配置文件中的默认提示词
+                )
+            else:
+                logger.info(f"  - 源视频时间范围: {media_info.get('start_relative_timestamp', 'N/A'):.2f}s - {media_info.get('end_relative_timestamp', 'N/A'):.2f}s")
+                
+                # 执行异步视频推理
+                result = await self.vlm_client.analyze_video_async(
+                    media_path, 
+                    prompt=None,  # 使用配置文件中的默认提示词
+                    fps=2
+                )
             
             # 记录推理结束时间
             inference_end_time = time.time()
             inference_end_timestamp = datetime.now().isoformat()
             inference_duration = inference_end_time - inference_start_time
             
-            logger.info(f"异步VLM推理完成: {os.path.basename(video_info['video_path'])}")
+            logger.info(f"异步VLM推理完成: {os.path.basename(media_path)} ({media_type})")
             logger.info(f"  - 推理结束时间: {inference_end_timestamp}")
             logger.info(f"  - 推理耗时: {inference_duration:.2f}s")
             logger.info(f"  - 结果长度: {len(result) if result else 0}字符")
             
             # 将结果放入结果队列
             result_data = {
-                'video_path': video_info['video_path'],
+                'media_path': media_path,
+                'media_type': media_type,
                 'result': result,
-                'video_info': video_info,
+                'media_info': media_info,
                 'inference_start_time': inference_start_time,
                 'inference_end_time': inference_end_time,
                 'inference_start_timestamp': inference_start_timestamp,
@@ -368,16 +395,22 @@ class AsyncVideoProcessor:
                 'result_received_at': time.time()
             }
             
+            # 为了向后兼容，保留video_path字段
+            if 'video_path' not in result_data:
+                result_data['video_path'] = media_path
+            if 'video_info' not in result_data:
+                result_data['video_info'] = media_info
+            
             # 记录到实验日志
             self.experiment_log.append(result_data.copy())
             self.total_inferences_completed += 1
             
-            # 保存推理结果到视频详情文件夹
+            # 保存推理结果到媒体详情文件夹
             self._save_inference_result_to_details(result_data)
             
             try:
                 self.result_queue.put(result_data, timeout=1)
-                logger.info(f"异步推理结果已入队: {os.path.basename(video_info['video_path'])}")
+                logger.info(f"异步推理结果已入队: {os.path.basename(media_path)} ({media_type})")
             except queue.Full:
                 logger.warning("结果队列已满，丢弃结果")
                 
@@ -386,7 +419,7 @@ class AsyncVideoProcessor:
             self.total_inferences_completed += 1  # 即使失败也计入完成数
             
         # 注意：不删除临时文件，保留用于调试
-        logger.debug(f"保留视频文件用于调试: {video_info['video_path']}")
+        logger.debug(f"保留媒体文件用于调试: {media_path}")
 
     def _sample_frames_by_time(self, frames_data: List[Dict]) -> List[Dict]:
         """
@@ -471,126 +504,192 @@ class AsyncVideoProcessor:
                     frame_data = self.frame_queue.get(timeout=1)
                 except queue.Empty:
                     continue
-                    
-                # 添加到缓冲区
-                self.frame_buffer.append(frame_data)
                 
-                # 当缓冲区达到一个视频所需的帧数时，进行抽帧并创建视频
-                if len(self.frame_buffer) >= self.frames_to_collect_per_video:
-                    # 抽取帧
-                    sampled_frames = self._sample_frames_by_time(self.frame_buffer[:self.frames_to_collect_per_video])
-                    
-                    # 创建视频
-                    video_creation_start = time.time()
-                    video_path = self._create_video_from_frames(sampled_frames)
-                    video_creation_time = time.time() - video_creation_start
-                    
-                    if video_path:
-                        # 计算时间范围
-                        start_timestamp = sampled_frames[0]['timestamp']
-                        end_timestamp = sampled_frames[-1]['timestamp']
-                        start_relative = sampled_frames[0]['relative_timestamp']
-                        end_relative = sampled_frames[-1]['relative_timestamp']
-                        
-                        # 保存抽帧详情到实验目录
-                        video_info = self._save_video_details(sampled_frames, video_path, video_creation_time)
-                        
-                        # 使用保存后的视频路径（可能已被移动到details文件夹）
-                        final_video_path = video_info.get('video_path', video_path)
-                        
-                        video_info.update({
-                            'video_path': final_video_path,  # 使用最终的视频路径
-                            'frame_count': len(sampled_frames),
-                            'start_timestamp': start_timestamp,
-                            'end_timestamp': end_timestamp,
-                            'start_relative_timestamp': start_relative,
-                            'end_relative_timestamp': end_relative,
-                            'duration': end_timestamp - start_timestamp,
-                            'relative_duration': end_relative - start_relative,
-                            'original_frame_range': (
-                                sampled_frames[0]['frame_number'],
-                                sampled_frames[-1]['frame_number']
-                            ),
-                            'video_creation_time': video_creation_time,
-                            'video_creation_timestamp': datetime.fromtimestamp(video_creation_start).isoformat(),
-                            'created_at': time.time()
-                        })
-                        
-                        self.total_videos_created += 1
-                        logger.info(f"视频片段已生成: {os.path.basename(video_path)}")
-                        logger.info(f"  - 帧范围: {video_info['original_frame_range']}")
-                        logger.info(f"  - 源视频时间: {start_relative:.2f}s - {end_relative:.2f}s")
-                        logger.info(f"  - 视频创建耗时: {video_creation_time:.3f}s")
-                        
-                        # 立即提交异步推理任务
-                        self._submit_inference_task(video_info)
-                    
-                    # 移除已处理的帧，保留25%重叠以确保连续性
-                    overlap_frames = self.frames_to_collect_per_video // 4
-                    self.frame_buffer = self.frame_buffer[self.frames_to_collect_per_video - overlap_frames:]
+                if self.image_mode:
+                    # 图像模式：直接处理单帧
+                    self._process_single_frame(frame_data)
+                else:
+                    # 视频模式：收集帧并创建视频
+                    self._process_video_frames(frame_data)
                     
         except Exception as e:
             logger.error(f"视频写入线程错误: {str(e)}")
-
-    def _save_video_details(self, sampled_frames: List[Dict], video_path: str, creation_time: float) -> Dict:
-        """保存视频详情到实验目录"""
+    
+    def _process_single_frame(self, frame_data: Dict):
+        """处理单帧图像（图像模式）"""
         try:
-            # 创建视频详情目录
-            video_name = os.path.splitext(os.path.basename(video_path))[0]
-            details_dir = os.path.join(self.temp_dir, f"{video_name}_details")
+            # 检查是否需要抽帧（按间隔）
+            if self.total_frames_received % self.frames_per_interval != 0:
+                return
+            
+            # 创建图像文件
+            image_creation_start = time.time()
+            image_path = self._create_image_from_frame(frame_data)
+            image_creation_time = time.time() - image_creation_start
+            
+            if image_path:
+                # 保存图像详情到实验目录
+                image_info = self._save_image_details(frame_data, image_path, image_creation_time)
+                
+                # 使用保存后的图像路径
+                final_image_path = image_info.get('image_path', image_path)
+                
+                image_info.update({
+                    'media_path': final_image_path,  # 统一使用media_path字段
+                    'media_type': 'image',
+                    'frame_count': 1,
+                    'timestamp': frame_data['timestamp'],
+                    'relative_timestamp': frame_data['relative_timestamp'],
+                    'frame_number': frame_data['frame_number'],
+                    'image_creation_time': image_creation_time,
+                    'image_creation_timestamp': datetime.fromtimestamp(image_creation_start).isoformat(),
+                    'created_at': time.time()
+                })
+                
+                self.total_images_created += 1
+                logger.info(f"图像已生成: {os.path.basename(image_path)}")
+                logger.info(f"  - 帧号: {frame_data['frame_number']}")
+                logger.info(f"  - 时间戳: {frame_data['relative_timestamp']:.2f}s")
+                logger.info(f"  - 图像创建耗时: {image_creation_time:.3f}s")
+                
+                # 立即提交异步推理任务
+                self._submit_inference_task(image_info)
+                
+        except Exception as e:
+            logger.error(f"处理单帧图像失败: {str(e)}")
+    
+    def _process_video_frames(self, frame_data: Dict):
+        """处理视频帧（视频模式）"""
+        # 添加到缓冲区
+        self.frame_buffer.append(frame_data)
+        
+        # 当缓冲区达到一个视频所需的帧数时，进行抽帧并创建视频
+        if len(self.frame_buffer) >= self.frames_to_collect_per_video:
+            # 抽取帧
+            sampled_frames = self._sample_frames_by_time(self.frame_buffer[:self.frames_to_collect_per_video])
+            
+            # 创建视频
+            video_creation_start = time.time()
+            video_path = self._create_video_from_frames(sampled_frames)
+            video_creation_time = time.time() - video_creation_start
+            
+            if video_path:
+                # 计算时间范围
+                start_timestamp = sampled_frames[0]['timestamp']
+                end_timestamp = sampled_frames[-1]['timestamp']
+                start_relative = sampled_frames[0]['relative_timestamp']
+                end_relative = sampled_frames[-1]['relative_timestamp']
+                
+                # 保存抽帧详情到实验目录
+                video_info = self._save_video_details(sampled_frames, video_path, video_creation_time)
+                
+                # 使用保存后的视频路径（可能已被移动到details文件夹）
+                final_video_path = video_info.get('video_path', video_path)
+                
+                video_info.update({
+                    'media_path': final_video_path,  # 统一使用media_path字段
+                    'media_type': 'video',
+                    'frame_count': len(sampled_frames),
+                    'start_timestamp': start_timestamp,
+                    'end_timestamp': end_timestamp,
+                    'start_relative_timestamp': start_relative,
+                    'end_relative_timestamp': end_relative,
+                    'duration': end_timestamp - start_timestamp,
+                    'relative_duration': end_relative - start_relative,
+                    'original_frame_range': (
+                        sampled_frames[0]['frame_number'],
+                        sampled_frames[-1]['frame_number']
+                    ),
+                    'video_creation_time': video_creation_time,
+                    'video_creation_timestamp': datetime.fromtimestamp(video_creation_start).isoformat(),
+                    'created_at': time.time()
+                })
+                
+                self.total_videos_created += 1
+                logger.info(f"视频片段已生成: {os.path.basename(video_path)}")
+                logger.info(f"  - 帧范围: {video_info['original_frame_range']}")
+                logger.info(f"  - 源视频时间: {start_relative:.2f}s - {end_relative:.2f}s")
+                logger.info(f"  - 视频创建耗时: {video_creation_time:.3f}s")
+                
+                # 立即提交异步推理任务
+                self._submit_inference_task(video_info)
+            
+            # 移除已处理的帧，保留25%重叠以确保连续性
+            overlap_frames = self.frames_to_collect_per_video // 4
+            self.frame_buffer = self.frame_buffer[self.frames_to_collect_per_video - overlap_frames:]
+    
+    def _create_image_from_frame(self, frame_data: Dict) -> Optional[str]:
+        """从单帧创建图像文件"""
+        try:
+            # 创建图像文件路径
+            timestamp = datetime.fromtimestamp(frame_data['timestamp'])
+            image_name = f"frame_{frame_data['frame_number']:06d}_{timestamp.strftime('%H%M%S_%f')[:-3]}.jpg"
+            image_path = os.path.join(self.temp_dir, image_name)
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(image_path), exist_ok=True)
+            
+            # 保存图像
+            success = cv2.imwrite(image_path, frame_data['frame'])
+            
+            if success:
+                logger.debug(f"图像已保存: {image_path}")
+                return image_path
+            else:
+                logger.error(f"保存图像失败: {image_path}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"创建图像文件失败: {str(e)}")
+            return None
+    
+    def _save_image_details(self, frame_data: Dict, image_path: str, creation_time: float) -> Dict:
+        """保存图像详情到实验目录"""
+        try:
+            # 创建图像详情目录
+            image_name = os.path.splitext(os.path.basename(image_path))[0]
+            details_dir = os.path.join(self.temp_dir, f"{image_name}_details")
             os.makedirs(details_dir, exist_ok=True)
             
-            # 将视频文件移动到details文件夹内
-            new_video_path = os.path.join(details_dir, os.path.basename(video_path))
-            if os.path.exists(video_path) and video_path != new_video_path:
+            # 将图像文件移动到details文件夹内
+            new_image_path = os.path.join(details_dir, os.path.basename(image_path))
+            if os.path.exists(image_path) and image_path != new_image_path:
                 import shutil
-                shutil.move(video_path, new_video_path)
-                logger.debug(f"视频文件已移动到: {new_video_path}")
+                shutil.move(image_path, new_image_path)
+                logger.debug(f"图像文件已移动到: {new_image_path}")
             else:
-                new_video_path = video_path
-            
-            # 保存抽取的帧
-            frame_paths = []
-            for i, frame_data in enumerate(sampled_frames):
-                frame_path = os.path.join(details_dir, f"frame_{i:02d}_orig_{frame_data['frame_number']:04d}.jpg")
-                cv2.imwrite(frame_path, frame_data['frame'])
-                frame_paths.append(frame_path)
+                new_image_path = image_path
             
             # 保存详情JSON
             details = {
-                'video_path': new_video_path,  # 使用新的视频路径
+                'image_path': new_image_path,
                 'creation_time': creation_time,
                 'creation_timestamp': datetime.fromtimestamp(time.time()).isoformat(),
-                'total_frames': len(sampled_frames),
-                'frames_per_second': self.frames_per_second,
-                'target_duration': self.target_video_duration,
-                'sampled_frames': [
-                    {
-                        'index': i,
-                        'original_frame_number': frame['frame_number'],
-                        'timestamp': frame['timestamp'],
-                        'timestamp_iso': datetime.fromtimestamp(frame['timestamp']).isoformat(),
-                        'relative_timestamp': frame['relative_timestamp'],
-                        'saved_path': frame_paths[i]
-                    }
-                    for i, frame in enumerate(sampled_frames)
-                ]
+                'frame_number': frame_data['frame_number'],
+                'timestamp': frame_data['timestamp'],
+                'timestamp_iso': datetime.fromtimestamp(frame_data['timestamp']).isoformat(),
+                'relative_timestamp': frame_data['relative_timestamp'],
+                'frame_info': {
+                    'width': frame_data['frame'].shape[1],
+                    'height': frame_data['frame'].shape[0],
+                    'channels': frame_data['frame'].shape[2] if len(frame_data['frame'].shape) > 2 else 1
+                }
             }
             
-            details_file = os.path.join(details_dir, 'video_details.json')
+            details_file = os.path.join(details_dir, 'image_details.json')
             with open(details_file, 'w', encoding='utf-8') as f:
                 json.dump(details, f, ensure_ascii=False, indent=2, default=str)
             
-            logger.info(f"视频详情已保存: {details_dir}")
+            logger.info(f"图像详情已保存: {details_dir}")
             return {
                 'details_dir': details_dir, 
                 'details_file': details_file,
-                'video_path': new_video_path  # 返回新的视频路径
+                'image_path': new_image_path
             }
             
         except Exception as e:
-            logger.error(f"保存视频详情失败: {str(e)}")
-            return {'video_path': video_path}  # 失败时返回原路径
+            logger.error(f"保存图像详情失败: {str(e)}")
+            return {'image_path': image_path}
 
     def _create_video_from_frames(self, frames_data: List[Dict]) -> Optional[str]:
         """从帧数据创建视频文件"""
@@ -797,6 +896,7 @@ class AsyncVideoProcessor:
                     'statistics': {
                         'total_frames_received': self.total_frames_received,
                         'total_videos_created': self.total_videos_created,
+                        'total_images_created': self.total_images_created,
                         'total_inferences_started': self.total_inferences_started,
                         'total_inferences_completed': self.total_inferences_completed,
                         'start_time': self.start_time,
@@ -877,3 +977,63 @@ class AsyncVideoProcessor:
             
         except Exception as e:
             logger.error(f"保存推理结果失败: {str(e)}") 
+
+    def _save_video_details(self, sampled_frames: List[Dict], video_path: str, creation_time: float) -> Dict:
+        """保存视频详情到实验目录"""
+        try:
+            # 创建视频详情目录
+            video_name = os.path.splitext(os.path.basename(video_path))[0]
+            details_dir = os.path.join(self.temp_dir, f"{video_name}_details")
+            os.makedirs(details_dir, exist_ok=True)
+            
+            # 将视频文件移动到details文件夹内
+            new_video_path = os.path.join(details_dir, os.path.basename(video_path))
+            if os.path.exists(video_path) and video_path != new_video_path:
+                import shutil
+                shutil.move(video_path, new_video_path)
+                logger.debug(f"视频文件已移动到: {new_video_path}")
+            else:
+                new_video_path = video_path
+            
+            # 保存抽取的帧
+            frame_paths = []
+            for i, frame_data in enumerate(sampled_frames):
+                frame_path = os.path.join(details_dir, f"frame_{i:02d}_orig_{frame_data['frame_number']:04d}.jpg")
+                cv2.imwrite(frame_path, frame_data['frame'])
+                frame_paths.append(frame_path)
+            
+            # 保存详情JSON
+            details = {
+                'video_path': new_video_path,  # 使用新的视频路径
+                'creation_time': creation_time,
+                'creation_timestamp': datetime.fromtimestamp(time.time()).isoformat(),
+                'total_frames': len(sampled_frames),
+                'frames_per_second': self.frames_per_second,
+                'target_duration': self.target_video_duration,
+                'sampled_frames': [
+                    {
+                        'index': i,
+                        'original_frame_number': frame['frame_number'],
+                        'timestamp': frame['timestamp'],
+                        'timestamp_iso': datetime.fromtimestamp(frame['timestamp']).isoformat(),
+                        'relative_timestamp': frame['relative_timestamp'],
+                        'saved_path': frame_paths[i]
+                    }
+                    for i, frame in enumerate(sampled_frames)
+                ]
+            }
+            
+            details_file = os.path.join(details_dir, 'video_details.json')
+            with open(details_file, 'w', encoding='utf-8') as f:
+                json.dump(details, f, ensure_ascii=False, indent=2, default=str)
+            
+            logger.info(f"视频详情已保存: {details_dir}")
+            return {
+                'details_dir': details_dir, 
+                'details_file': details_file,
+                'video_path': new_video_path  # 返回新的视频路径
+            }
+            
+        except Exception as e:
+            logger.error(f"保存视频详情失败: {str(e)}")
+            return {'video_path': video_path}  # 失败时返回原路径 

@@ -36,6 +36,28 @@ from monitor.core.config import load_config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def safe_relative_path(path: Path, base: Optional[Path] = None) -> str:
+    """
+    安全地计算相对路径，如果无法计算则返回绝对路径
+    
+    Args:
+        path: 要计算相对路径的路径
+        base: 基准路径，默认为当前工作目录
+        
+    Returns:
+        相对路径字符串，如果无法计算则返回绝对路径字符串
+    """
+    if base is None:
+        base = Path.cwd()
+    
+    try:
+        # 尝试计算相对路径
+        return str(path.relative_to(base))
+    except ValueError:
+        # 如果无法计算相对路径，返回绝对路径
+        logger.warning(f"无法计算相对路径: {path} 相对于 {base}，使用绝对路径")
+        return str(path.resolve())
+
 # 创建FastAPI应用
 app = FastAPI(
     title="VLM监控系统API",
@@ -233,7 +255,7 @@ class AppState:
                     "target_duration": video_details.get("target_duration"),
                     "sampled_frames": video_details.get("sampled_frames", []),
                     "creation_time": video_details.get("creation_time"),
-                    "session_dir": str(sampled_dir),
+                    "session_dir": str(state.latest_session_dir.relative_to(Path.cwd())) if state.latest_session_dir else None,
                     "video_id": sampled_dir.name.replace('_details', ''),
                     "has_inference_result": False
                 }
@@ -1037,7 +1059,7 @@ async def get_inference_count():
             success=True,
             data={
                 "count": len(inference_results),
-                "session_dir": state.latest_session_dir.name if state.latest_session_dir else None,
+                "session_dir": safe_relative_path(state.latest_session_dir) if state.latest_session_dir else None,
                 "has_experiment_log": state.experiment_log_path is not None and state.experiment_log_path.exists()
             },
             timestamp=time.time()
@@ -1113,6 +1135,285 @@ async def debug_videos():
             error=f"调试视频信息失败: {str(e)}",
             timestamp=time.time()
         )
+
+@app.get("/api/media-history", response_model=ApiResponse)
+async def get_media_history(limit: int = 50):
+    """获取媒体历史记录（图像和视频）"""
+    try:
+        # 刷新最新的session目录
+        state._find_latest_session_dir()
+        
+        if not state.latest_session_dir or not state.latest_session_dir.exists():
+            return ApiResponse(
+                success=False,
+                error="没有找到session目录",
+                timestamp=time.time()
+            )
+        
+        media_items = []
+        
+        # 遍历session目录下的所有details文件夹
+        for item in state.latest_session_dir.iterdir():
+            if item.is_dir() and item.name.endswith('_details'):
+                try:
+                    # 检查是否是图像模式（frame_xxx_details）
+                    if item.name.startswith('frame_'):
+                        # 图像模式
+                        image_details_file = item / 'image_details.json'
+                        inference_result_file = item / 'inference_result.json'
+                        
+                        if image_details_file.exists():
+                            with open(image_details_file, 'r', encoding='utf-8') as f:
+                                image_details = json.load(f)
+                            
+                            # 查找图像文件
+                            image_files = list(item.glob('*.jpg')) + list(item.glob('*.png'))
+                            if image_files:
+                                image_file = image_files[0]
+                                
+                                media_item = {
+                                    'type': 'image',
+                                    'media_path': safe_relative_path(image_file),
+                                    'filename': image_file.name,
+                                    'frame_number': image_details.get('frame_number'),
+                                    'timestamp': image_details.get('timestamp'),
+                                    'timestamp_iso': image_details.get('timestamp_iso'),
+                                    'relative_timestamp': image_details.get('relative_timestamp'),
+                                    'creation_time': image_details.get('creation_time'),
+                                    'has_inference_result': inference_result_file.exists(),
+                                    'details_dir': safe_relative_path(item)
+                                }
+                                
+                                # 如果有推理结果，添加推理信息
+                                if inference_result_file.exists():
+                                    with open(inference_result_file, 'r', encoding='utf-8') as f:
+                                        inference_result = json.load(f)
+                                    
+                                    parsed_result = inference_result.get('parsed_result', {})
+                                    media_item.update({
+                                        'people_count': parsed_result.get('people_count', 0),
+                                        'vehicle_count': parsed_result.get('vehicle_count', 0),
+                                        'people': parsed_result.get('people', []),
+                                        'vehicles': parsed_result.get('vehicles', []),
+                                        'summary': parsed_result.get('summary', ''),
+                                        'inference_duration': inference_result.get('inference_duration'),
+                                        'inference_start_timestamp': inference_result.get('inference_start_timestamp'),
+                                        'inference_end_timestamp': inference_result.get('inference_end_timestamp')
+                                    })
+                                
+                                media_items.append(media_item)
+                    
+                    else:
+                        # 视频模式（sampled_video_xxx_details）
+                        video_details_file = item / 'video_details.json'
+                        inference_result_file = item / 'inference_result.json'
+                        
+                        if video_details_file.exists():
+                            with open(video_details_file, 'r', encoding='utf-8') as f:
+                                video_details = json.load(f)
+                            
+                            # 查找视频文件
+                            video_files = list(item.glob('*.mp4'))
+                            if video_files:
+                                video_file = video_files[0]
+                                
+                                media_item = {
+                                    'type': 'video',
+                                    'media_path': safe_relative_path(video_file),
+                                    'filename': video_file.name,
+                                    'total_frames': video_details.get('total_frames'),
+                                    'frames_per_second': video_details.get('frames_per_second'),
+                                    'target_duration': video_details.get('target_duration'),
+                                    'creation_time': video_details.get('creation_time'),
+                                    'creation_timestamp': video_details.get('creation_timestamp'),
+                                    'sampled_frames': video_details.get('sampled_frames', []),
+                                    'has_inference_result': inference_result_file.exists(),
+                                    'details_dir': safe_relative_path(item)
+                                }
+                                
+                                # 计算视频的时间范围
+                                sampled_frames = video_details.get('sampled_frames', [])
+                                if sampled_frames:
+                                    media_item.update({
+                                        'start_timestamp': sampled_frames[0].get('timestamp'),
+                                        'end_timestamp': sampled_frames[-1].get('timestamp'),
+                                        'start_relative_timestamp': sampled_frames[0].get('relative_timestamp'),
+                                        'end_relative_timestamp': sampled_frames[-1].get('relative_timestamp'),
+                                        'original_frame_range': [
+                                            sampled_frames[0].get('original_frame_number'),
+                                            sampled_frames[-1].get('original_frame_number')
+                                        ]
+                                    })
+                                
+                                # 如果有推理结果，添加推理信息
+                                if inference_result_file.exists():
+                                    with open(inference_result_file, 'r', encoding='utf-8') as f:
+                                        inference_result = json.load(f)
+                                    
+                                    parsed_result = inference_result.get('parsed_result', {})
+                                    media_item.update({
+                                        'people_count': parsed_result.get('people_count', 0),
+                                        'vehicle_count': parsed_result.get('vehicle_count', 0),
+                                        'people': parsed_result.get('people', []),
+                                        'vehicles': parsed_result.get('vehicles', []),
+                                        'summary': parsed_result.get('summary', ''),
+                                        'inference_duration': inference_result.get('inference_duration'),
+                                        'inference_start_timestamp': inference_result.get('inference_start_timestamp'),
+                                        'inference_end_timestamp': inference_result.get('inference_end_timestamp')
+                                    })
+                                
+                                media_items.append(media_item)
+                
+                except Exception as e:
+                    logger.warning(f"处理媒体项目失败 {item}: {e}")
+                    continue
+        
+        # 按时间戳排序（最新的在前）
+        media_items.sort(key=lambda x: x.get('timestamp', 0) or x.get('creation_timestamp', ''), reverse=True)
+        
+        # 限制返回数量
+        if limit > 0:
+            media_items = media_items[:limit]
+        
+        return ApiResponse(
+            success=True,
+            data={
+                'media_items': media_items,
+                'total_count': len(media_items),
+                'session_dir': safe_relative_path(state.latest_session_dir) if state.latest_session_dir else None
+            },
+            timestamp=time.time()
+        )
+        
+    except Exception as e:
+        logger.error(f"获取媒体历史记录失败: {e}")
+        return ApiResponse(
+            success=False,
+            error=f"获取媒体历史记录失败: {str(e)}",
+            timestamp=time.time()
+        )
+
+@app.get("/api/media/{filename}")
+@app.head("/api/media/{filename}")
+async def serve_media(filename: str, request: Request):
+    """提供媒体文件（图像或视频）"""
+    try:
+        logger.info(f"请求媒体文件: {filename}")
+        
+        # 刷新最新的session目录
+        state._find_latest_session_dir()
+        
+        if not state.latest_session_dir:
+            raise HTTPException(status_code=404, detail="临时目录不存在")
+        
+        media_file = None
+        
+        # 在当前session目录下查找媒体文件
+        for item in state.latest_session_dir.iterdir():
+            if item.is_dir() and item.name.endswith('_details'):
+                # 查找匹配的媒体文件（视频或图像）
+                for media_path in item.glob('*'):
+                    if media_path.is_file() and media_path.name == filename:
+                        # 检查是否是支持的媒体格式
+                        if media_path.suffix.lower() in ['.mp4', '.jpg', '.jpeg', '.png']:
+                            media_file = media_path
+                            logger.info(f"找到媒体文件: {media_file}")
+                            break
+                if media_file:
+                    break
+        
+        if not media_file:
+            logger.error(f"媒体文件不存在: {filename}")
+            logger.info(f"当前session目录: {state.latest_session_dir}")
+            
+            # 列出所有可用的媒体文件用于调试
+            available_media = []
+            if state.latest_session_dir:
+                for item in state.latest_session_dir.iterdir():
+                    if item.is_dir() and item.name.endswith('_details'):
+                        for media in item.glob('*'):
+                            if media.is_file() and media.suffix.lower() in ['.mp4', '.jpg', '.jpeg', '.png']:
+                                available_media.append(media.name)
+            logger.info(f"可用的媒体文件: {available_media}")
+            raise HTTPException(status_code=404, detail=f"媒体文件不存在: {filename}")
+        
+        # 检查文件是否真的存在且可读
+        if not media_file.exists():
+            raise HTTPException(status_code=404, detail=f"媒体文件不存在: {media_file}")
+        
+        if not media_file.is_file():
+            raise HTTPException(status_code=404, detail=f"路径不是文件: {media_file}")
+        
+        file_size = media_file.stat().st_size
+        logger.info(f"返回媒体文件: {media_file}, 大小: {file_size} bytes")
+        
+        # 根据文件类型设置Content-Type
+        content_type = "application/octet-stream"
+        if media_file.suffix.lower() == '.mp4':
+            content_type = "video/mp4"
+        elif media_file.suffix.lower() in ['.jpg', '.jpeg']:
+            content_type = "image/jpeg"
+        elif media_file.suffix.lower() == '.png':
+            content_type = "image/png"
+        
+        # 对于图像文件，直接返回
+        if media_file.suffix.lower() in ['.jpg', '.jpeg', '.png']:
+            return FileResponse(
+                path=str(media_file),
+                media_type=content_type,
+                filename=media_file.name
+            )
+        
+        # 对于视频文件，处理Range请求
+        range_header = request.headers.get('range')
+        if range_header:
+            logger.info(f"处理Range请求: {range_header}")
+            # 解析Range头
+            range_match = range_header.replace('bytes=', '').split('-')
+            start = int(range_match[0]) if range_match[0] else 0
+            end = int(range_match[1]) if range_match[1] else file_size - 1
+            
+            # 确保范围有效
+            start = max(0, start)
+            end = min(file_size - 1, end)
+            content_length = end - start + 1
+            
+            def iter_file():
+                with open(media_file, 'rb') as f:
+                    f.seek(start)
+                    remaining = content_length
+                    while remaining > 0:
+                        chunk_size = min(8192, remaining)
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+            
+            return StreamingResponse(
+                iter_file(),
+                status_code=206,
+                headers={
+                    'Content-Range': f'bytes {start}-{end}/{file_size}',
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': str(content_length),
+                    'Content-Type': content_type,
+                },
+                media_type=content_type
+            )
+        else:
+            # 完整文件响应
+            return FileResponse(
+                path=str(media_file),
+                media_type=content_type,
+                filename=media_file.name
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"提供媒体文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 # 健康检查端点
 @app.get("/health")

@@ -1,14 +1,14 @@
 {
   "video_processing": {
-    "target_video_duration": 3.0,
-    "frames_per_second": 5,
-    "target_frames_per_video": 15,
+    "target_video_duration": 1.0,
+    "frames_per_second": 1,
+    "target_frames_per_video": 1,
     "enable_frame_resize": true,
     "target_width": 640,
     "target_height": 360,
     "max_frame_size_mb": 5.0,
     "maintain_aspect_ratio": true,
-    "comment": "从原始帧率中每秒抽取5帧，3秒视频共15帧。图像缩放配置：enable_frame_resize启用缩放，target_width/height为目标尺寸，max_frame_size_mb为单帧最大大小限制"
+    "comment": "图像模式：当target_video_duration、frames_per_second、target_frames_per_video都为1时启用图像模式，每帧单独推理"
   },
   "stream": {
     "type": "tcp",
@@ -49,7 +49,7 @@
     "max_base64_size_mb": 10,
     "default_prompt": {
       "system": "You are a helpful assistant that analyzes videos and returns structured JSON responses.",
-      "user_template": "请分析这段视频并以JSON格式回复，包含以下信息：\n{\n  \"timestamp\": \"当前时间(ISO格式)\",\n  \"people_count\": 人数,\n  \"vehicle_count\": 车辆数,\n  \"people\": [\n    {\n      \"id\": 人员编号,\n      \"bbox\": [x1, y1, x2, y2],\n      \"activity\": \"正在做什么\"\n    }\n  ],\n  \"vehicles\": [\n    {\n      \"id\": 车辆编号,\n      \"bbox\": [x1, y1, x2, y2],\n      \"type\": \"车辆类型(如:汽车/卡车/摩托车/自行车等)\",\n      \"status\": \"状态(如:行驶/停车/转弯等)\"\n    }\n  ],\n  \"summary\": \"一句话概括场景\"\n}\n\n要求：\n1. 如果没有人，people_count为0，people为空数组\n2. 如果没有车辆，vehicle_count为0，vehicles为空数组\n3. bbox坐标为相对坐标(0-1之间)，格式为[x1, y1, x2, y2]，其中(x1,y1)是左上角坐标，(x2,y2)是右下角坐标\n4. 车辆类型要具体，如小轿车、SUV、卡车、公交车、摩托车、自行车等\n5. 回复要简洁，activity和status用简短词语描述\n6. 只返回JSON，不要其他文字"
+      "user_template": "请分析这段视频并以JSON格式回复，包含以下信息：\n{\n  \"timestamp\": \"当前时间(ISO格式)\",\n  \"people_count\": 人数,\n  \"vehicle_count\": 车辆数,\n  \"people\": [\n    {\n      \"id\": 人员编号,\n      \"bbox\": [x1, y1, x2, y2],\n      \"activity\": \"正在做什么\"\n    }\n  ],\n  \"vehicles\": [\n    {\n      \"id\": 车辆编号,\n      \"bbox\": [x1, y1, x2, y2],\n      \"type\": \"车辆类型(如:汽车/卡车/摩托车/自行车等)\",\n      \"status\": \"状态(如:行驶/停车/转弯等)\"\n    }\n  ],\n  \"summary\": \"一句话概括场景\"\n}\n\n要求：\n1. 如果没有人，people_count为0，people为空数组\n2. 如果没有车辆，vehicle_count为0，vehicles为空数组\n3. **bbox坐标为相对坐标(0-1之间)**，格式为[x1, y1, x2, y2]，其中(x1,y1)是左上角坐标，(x2,y2)是右下角坐标\n4. 车辆类型要具体，如小轿车、SUV、卡车、公交车、摩托车、自行车等\n5. 回复要简洁，activity和status用简短词语描述\n6. 只返回JSON，不要其他文字"
     },
     "comment": "VLM推理相关配置，包含API密钥、模型、并发数等"
   },

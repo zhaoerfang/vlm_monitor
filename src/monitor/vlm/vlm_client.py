@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VLM客户端模块
-提供视频分析功能，支持同步和异步调用
+提供视频和图像分析功能，支持同步和异步调用
 """
 
 import os
@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import Optional, Dict, List, Any
 from openai import AsyncOpenAI
+from pathlib import Path
 
 # 导入配置管理模块
 from ..core.config import load_config
@@ -59,11 +60,23 @@ class DashScopeVLMClient:
             base_url=self.base_url,
         )
         
+        # 支持的文件格式
+        self.video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
+        self.image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}
+        
         logger.info(f"✅ VLM客户端初始化完成:")
         logger.info(f"  - 模型: {self.model}")
         logger.info(f"  - 基础URL: {self.base_url}")
         logger.info(f"  - 最大视频大小: {self.max_video_size_mb}MB")
         logger.info(f"  - 最大Base64大小: {self.max_base64_size_mb}MB")
+        
+    def _is_video_file(self, file_path: str) -> bool:
+        """判断文件是否为视频文件"""
+        return Path(file_path).suffix.lower() in self.video_extensions
+    
+    def _is_image_file(self, file_path: str) -> bool:
+        """判断文件是否为图像文件"""
+        return Path(file_path).suffix.lower() in self.image_extensions
         
     def encode_video(self, video_path: str) -> str:
         """将视频文件编码为base64格式"""
@@ -91,6 +104,29 @@ class DashScopeVLMClient:
         except Exception as e:
             logger.error(f"视频编码失败: {str(e)}")
             raise
+    
+    def encode_image(self, image_path: str) -> str:
+        """将图像文件编码为base64格式"""
+        try:
+            # 检查原始文件大小
+            file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
+            logger.info(f"原始图像文件大小: {file_size_mb:.2f}MB")
+            
+            if file_size_mb > self.max_base64_size_mb:
+                raise ValueError(f"图像文件过大: {file_size_mb:.2f}MB > {self.max_base64_size_mb}MB限制")
+            
+            with open(image_path, "rb") as image_file:
+                image_data = image_file.read()
+                base64_data = base64.b64encode(image_data).decode("utf-8")
+                
+                # 检查Base64编码后的大小
+                base64_size_mb = len(base64_data.encode('utf-8')) / (1024 * 1024)
+                logger.info(f"Base64编码后大小: {base64_size_mb:.2f}MB")
+                
+                return base64_data
+        except Exception as e:
+            logger.error(f"图像编码失败: {str(e)}")
+            raise
         
     def analyze_video(self, video_path: str, prompt: Optional[str] = None, fps: int = 2) -> Optional[str]:
         """
@@ -115,6 +151,52 @@ class DashScopeVLMClient:
                 loop.close()
         except Exception as e:
             logger.error(f"同步视频分析失败: {str(e)}")
+            return None
+    
+    def analyze_image(self, image_path: str, prompt: Optional[str] = None) -> Optional[str]:
+        """
+        同步分析图像内容
+        
+        Args:
+            image_path: 图像文件路径
+            prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
+            
+        Returns:
+            分析结果文本，如果失败返回None
+        """
+        try:
+            # 使用asyncio运行异步方法
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self.analyze_image_async(image_path, prompt))
+                return result
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"同步图像分析失败: {str(e)}")
+            return None
+    
+    def analyze_media(self, media_path: str, prompt: Optional[str] = None, fps: int = 2) -> Optional[str]:
+        """
+        自动识别并分析媒体文件（视频或图像）
+        
+        Args:
+            media_path: 媒体文件路径
+            prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
+            fps: 视频帧率（仅对视频有效）
+            
+        Returns:
+            分析结果文本，如果失败返回None
+        """
+        if self._is_video_file(media_path):
+            logger.info(f"检测到视频文件: {media_path}")
+            return self.analyze_video(media_path, prompt, fps)
+        elif self._is_image_file(media_path):
+            logger.info(f"检测到图像文件: {media_path}")
+            return self.analyze_image(media_path, prompt)
+        else:
+            logger.error(f"不支持的文件格式: {media_path}")
             return None
     
     async def analyze_video_async(self, video_path: str, prompt: Optional[str] = None, fps: int = 2) -> Optional[str]:
@@ -145,7 +227,7 @@ class DashScopeVLMClient:
             if prompt is None:
                 prompt = self.user_prompt_template
             
-            # 构建消息 - 使用正确的类型
+            # 构建消息 - 视频格式
             messages: List[Dict[str, Any]] = [
                 {
                     "role": "system",
@@ -184,4 +266,103 @@ class DashScopeVLMClient:
                 
         except Exception as e:
             logger.error(f"异步视频分析失败: {str(e)}")
+            return None
+    
+    async def analyze_image_async(self, image_path: str, prompt: Optional[str] = None) -> Optional[str]:
+        """
+        异步分析图像内容
+        
+        Args:
+            image_path: 图像文件路径
+            prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
+            
+        Returns:
+            分析结果文本，如果失败返回None
+        """
+        try:
+            # 检查文件大小
+            file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
+            if file_size_mb > self.max_base64_size_mb:
+                logger.error(f"图像文件过大: {file_size_mb:.2f}MB，超过{self.max_base64_size_mb}MB限制")
+                return None
+                
+            logger.info(f"开始异步分析图像: {image_path} ({file_size_mb:.2f}MB)")
+            
+            # 编码图像为base64
+            base64_image = self.encode_image(image_path)
+            
+            # 获取图像文件扩展名，用于确定MIME类型
+            ext = Path(image_path).suffix.lower()
+            mime_type = {
+                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.png': 'image/png', '.bmp': 'image/bmp',
+                '.gif': 'image/gif', '.tiff': 'image/tiff',
+                '.webp': 'image/webp'
+            }.get(ext, 'image/jpeg')
+            
+            # 使用配置文件中的默认提示词
+            if prompt is None:
+                prompt = self.user_prompt_template
+            
+            # 构建消息 - 图像格式
+            messages: List[Dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": self.system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{base64_image}"},
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            
+            # 异步调用API
+            completion = await self.async_client.chat.completions.create(
+                model=self.model,
+                messages=messages  # type: ignore
+            )
+            
+            # 处理响应
+            if completion.choices and len(completion.choices) > 0:
+                result = completion.choices[0].message.content
+                if result is not None:
+                    logger.info(f"异步图像分析完成，结果长度: {len(result)} 字符")
+                    return result
+                else:
+                    logger.error("API返回结果为空")
+                    return None
+            else:
+                logger.error(f"API响应格式异常: {completion}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"异步图像分析失败: {str(e)}")
+            return None
+    
+    async def analyze_media_async(self, media_path: str, prompt: Optional[str] = None, fps: int = 2) -> Optional[str]:
+        """
+        自动识别并异步分析媒体文件（视频或图像）
+        
+        Args:
+            media_path: 媒体文件路径
+            prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
+            fps: 视频帧率（仅对视频有效）
+            
+        Returns:
+            分析结果文本，如果失败返回None
+        """
+        if self._is_video_file(media_path):
+            logger.info(f"检测到视频文件: {media_path}")
+            return await self.analyze_video_async(media_path, prompt, fps)
+        elif self._is_image_file(media_path):
+            logger.info(f"检测到图像文件: {media_path}")
+            return await self.analyze_image_async(media_path, prompt)
+        else:
+            logger.error(f"不支持的文件格式: {media_path}")
             return None 

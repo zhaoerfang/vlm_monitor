@@ -108,33 +108,69 @@
             <div v-else class="inference-display">
               <div class="video-section">
                 <div class="video-player-container">
-                  <video 
-                    v-if="currentInference.video_path"
-                    ref="inferenceVideo"
-                    :src="getVideoUrl(currentInference.video_path)"
-                    controls
-                    autoplay
-                    loop
-                    muted
-                    class="inference-video"
-                    @loadedmetadata="onVideoLoaded"
-                    @error="onVideoError"
-                    @loadstart="onVideoLoadStart"
-                    @resize="onVideoResize"
-                  ></video>
+                  <!-- 图像显示 -->
+                  <div v-if="isCurrentInferenceImage" class="inference-image-container">
+                    <img 
+                      ref="inferenceImage"
+                      :src="getMediaUrl(currentInference.filename || getVideoFileName(currentInference.video_path))"
+                      class="inference-image"
+                      @load="onImageLoaded"
+                      @error="onImageError"
+                    />
+                    
+                    <!-- 图像覆盖层用于显示bbox -->
+                    <canvas 
+                      v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
+                      ref="bboxCanvas"
+                      class="bbox-overlay"
+                      @click="toggleBboxDisplay"
+                    ></canvas>
+                  </div>
                   
-                  <!-- 视频覆盖层用于显示bbox -->
-                  <canvas 
-                    v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
-                    ref="bboxCanvas"
-                    class="bbox-overlay"
-                    @click="toggleBboxDisplay"
-                  ></canvas>
+                  <!-- 视频显示 -->
+                  <div v-else class="inference-video-container">
+                    <video 
+                      v-if="currentInference.video_path"
+                      ref="inferenceVideo"
+                      :src="getVideoUrl(currentInference.video_path)"
+                      controls
+                      autoplay
+                      loop
+                      muted
+                      class="inference-video"
+                      @loadedmetadata="onVideoLoaded"
+                      @error="onVideoError"
+                      @loadstart="onVideoLoadStart"
+                      @resize="onVideoResize"
+                    ></video>
+                    
+                    <!-- 视频覆盖层用于显示bbox -->
+                    <canvas 
+                      v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
+                      ref="bboxCanvas"
+                      class="bbox-overlay"
+                      @click="toggleBboxDisplay"
+                    ></canvas>
+                  </div>
                   
-                  <div class="video-info">
-                    <p><strong>视频文件:</strong> {{ getVideoFileName(currentInference.video_path) }}</p>
-                    <p v-if="currentInference.total_frames"><strong>总帧数:</strong> {{ currentInference.total_frames }}</p>
-                    <p v-if="currentInference.sampled_frames"><strong>采样帧数:</strong> {{ currentInference.sampled_frames.length }}</p>
+                  <div class="media-info">
+                    <p v-if="isCurrentInferenceImage">
+                      <strong>图像文件:</strong> {{ currentInference.filename || getVideoFileName(currentInference.video_path) }}
+                    </p>
+                    <p v-else>
+                      <strong>视频文件:</strong> {{ getVideoFileName(currentInference.video_path) }}
+                    </p>
+                    
+                    <p v-if="currentInference.frame_number">
+                      <strong>帧号:</strong> {{ currentInference.frame_number }}
+                    </p>
+                    <p v-if="currentInference.total_frames">
+                      <strong>总帧数:</strong> {{ currentInference.total_frames }}
+                    </p>
+                    <p v-if="currentInference.sampled_frames">
+                      <strong>采样帧数:</strong> {{ currentInference.sampled_frames.length }}
+                    </p>
+                    
                     <p v-if="currentInference.has_inference_result" class="ai-status success">✅ AI分析完成</p>
                     <p v-else class="ai-status pending">⏳ 等待AI分析</p>
                   </div>
@@ -210,6 +246,74 @@
               </div>
             </div>
           </div>
+          
+          <!-- 历史记录区域 -->
+          <div class="history-section">
+            <div class="history-header">
+              <h4>历史记录</h4>
+              <div class="history-controls">
+                <button @click="loadMediaHistory" :disabled="isLoadingHistory" class="btn btn-sm btn-secondary">
+                  {{ isLoadingHistory ? '加载中...' : '刷新历史' }}
+                </button>
+                <span class="history-count">{{ mediaHistory.length }} 项</span>
+              </div>
+            </div>
+            
+            <div class="history-container">
+              <div v-if="mediaHistory.length === 0" class="history-placeholder">
+                <div class="placeholder-content">
+                  <div class="icon">📂</div>
+                  <p>暂无历史记录</p>
+                  <p class="hint">推理结果将显示在这里</p>
+                </div>
+              </div>
+              
+              <div v-else class="history-scroll">
+                <div 
+                  v-for="(item, index) in mediaHistory" 
+                  :key="item.filename"
+                  class="history-item"
+                  :class="{ 'active': selectedHistoryItem?.filename === item.filename }"
+                  @click="selectHistoryItem(item)"
+                >
+                  <div class="history-thumbnail">
+                    <div v-if="item.type === 'image'" class="thumbnail-image">
+                      <img 
+                        :src="getMediaUrl(item.filename)" 
+                        :alt="item.filename"
+                        @error="onThumbnailError"
+                      />
+                      <div class="media-type-badge image">📷</div>
+                    </div>
+                    <div v-else class="thumbnail-video">
+                      <video 
+                        :src="getMediaUrl(item.filename)"
+                        muted
+                        preload="metadata"
+                        @error="onThumbnailError"
+                      ></video>
+                      <div class="media-type-badge video">🎬</div>
+                    </div>
+                  </div>
+                  
+                  <div class="history-info">
+                    <div class="history-title">
+                      {{ item.type === 'image' ? `帧 ${item.frame_number}` : `视频 ${index + 1}` }}
+                    </div>
+                    <div class="history-time">
+                      {{ formatHistoryTime(item.timestamp || item.creation_timestamp) }}
+                    </div>
+                    <div class="history-status">
+                      <span v-if="item.has_inference_result" class="status-badge success">
+                        ✅ {{ item.people_count || 0 }}人 {{ item.vehicle_count || 0 }}车
+                      </span>
+                      <span v-else class="status-badge pending">⏳ 等待分析</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
@@ -243,6 +347,11 @@ let inferenceCheckInterval: number | null = null
 // bbox显示状态
 const showBbox = ref(true)
 
+// 历史记录相关状态
+const mediaHistory = ref<any[]>([])
+const selectedHistoryItem = ref<any>(null)
+const isLoadingHistory = ref(false)
+
 const stats = computed(() => store.stats)
 const latestInference = computed(() => store.latestInference)
 const currentInference = computed(() => store.playableInference)
@@ -254,6 +363,21 @@ const connectionStatus = computed(() => {
 
 const connectionText = computed(() => {
   return store.isConnected ? '已连接' : '未连接'
+})
+
+// 判断当前推理结果是否为图像
+const isCurrentInferenceImage = computed(() => {
+  if (!currentInference.value) return false
+  
+  // 检查是否有type字段
+  if (currentInference.value.type === 'image') return true
+  
+  // 检查是否有frame_number字段（图像模式特有）
+  if (currentInference.value.frame_number !== undefined) return true
+  
+  // 检查文件扩展名
+  const filename = currentInference.value.filename || currentInference.value.video_path || ''
+  return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(filename)
 })
 
 const parsedResult = computed(() => {
@@ -298,23 +422,30 @@ watch(currentFrame, (frame) => {
 }, { immediate: true })
 
 onMounted(async () => {
-  console.log('MonitorView 组件已挂载，开始初始化...')
+  console.log('🎬 MonitorView 组件已挂载')
   
   // 初始化WebSocket连接
   await initializeWebSocket()
   
-  // 加载历史数据
-  await loadExperimentLog()
+  // 加载初始数据
+  await loadMediaHistory()
   
-  // 定期检查系统状态
-  statusCheckInterval = setInterval(checkSystemStatus, 5000)
+  // 设置自动刷新历史记录的定时器（每10秒刷新一次）
+  const historyRefreshInterval = setInterval(async () => {
+    if (!isLoadingHistory.value) {
+      console.log('⏰ 定时刷新历史记录...')
+      await loadMediaHistory()
+    }
+  }, 10000) // 10秒刷新一次，避免过于频繁
   
-  // 定期检查推理结果（更频繁地检查）
-  inferenceCheckInterval = setInterval(checkInferenceCount, 2000)
+  // 保存定时器引用以便清理
+  ;(window as any).historyRefreshInterval = historyRefreshInterval
 })
 
 onUnmounted(() => {
-  // 断开WebSocket连接
+  console.log('🔌 MonitorView 组件即将卸载，清理资源...')
+  
+  // 清理WebSocket连接
   websocketService.disconnect()
   
   // 清理定时器
@@ -326,6 +457,12 @@ onUnmounted(() => {
   if (inferenceCheckInterval) {
     clearInterval(inferenceCheckInterval)
     inferenceCheckInterval = null
+  }
+  
+  // 清理重连定时器
+  if ((window as any).historyRefreshInterval) {
+    clearInterval((window as any).historyRefreshInterval)
+    delete (window as any).historyRefreshInterval
   }
 })
 
@@ -717,73 +854,85 @@ function toggleBboxDisplay() {
 }
 
 function drawBboxOverlay() {
-  if (!bboxCanvas.value || !inferenceVideo.value || !currentInference.value) return
+  if (!bboxCanvas.value || !currentInference.value) return
   
   const canvas = bboxCanvas.value
-  const video = inferenceVideo.value
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   
-  // 等待视频元数据加载完成
-  if (video.readyState < 1) {
-    console.log('⏳ 视频元数据未加载完成，等待中...')
+  let mediaElement: HTMLVideoElement | HTMLImageElement | null = null
+  let mediaWidth = 0
+  let mediaHeight = 0
+  let containerWidth = 0
+  let containerHeight = 0
+  
+  // 根据当前推理结果类型获取对应的媒体元素
+  if (isCurrentInferenceImage.value) {
+    // 图像模式
+    mediaElement = document.querySelector('.inference-image') as HTMLImageElement
+    if (!mediaElement || !mediaElement.complete) {
+      console.log('⏳ 图像未加载完成，等待中...')
+      return
+    }
+    mediaWidth = mediaElement.naturalWidth
+    mediaHeight = mediaElement.naturalHeight
+    containerWidth = mediaElement.clientWidth
+    containerHeight = mediaElement.clientHeight
+  } else {
+    // 视频模式
+    mediaElement = inferenceVideo.value
+    if (!mediaElement || mediaElement.readyState < 1) {
+      console.log('⏳ 视频元数据未加载完成，等待中...')
+      return
+    }
+    mediaWidth = (mediaElement as HTMLVideoElement).videoWidth
+    mediaHeight = (mediaElement as HTMLVideoElement).videoHeight
+    containerWidth = mediaElement.clientWidth
+    containerHeight = mediaElement.clientHeight
+  }
+  
+  if (!mediaElement || mediaWidth === 0 || mediaHeight === 0) {
+    console.warn('⚠️ 媒体元素尺寸无效')
     return
   }
   
-  // 获取视频的原始分辨率和容器尺寸
-  const videoWidth = video.videoWidth
-  const videoHeight = video.videoHeight
-  const containerWidth = video.clientWidth
-  const containerHeight = video.clientHeight
-  
-  // 计算视频在容器中的实际显示尺寸和位置（考虑object-fit: contain）
-  const videoAspectRatio = videoWidth / videoHeight
+  // 计算媒体在容器中的实际显示尺寸和位置（考虑object-fit: contain）
+  const mediaAspectRatio = mediaWidth / mediaHeight
   const containerAspectRatio = containerWidth / containerHeight
   
   let displayWidth, displayHeight, offsetX, offsetY
   
-  if (videoAspectRatio > containerAspectRatio) {
-    // 视频更宽，以容器宽度为准，高度按比例缩放
+  if (mediaAspectRatio > containerAspectRatio) {
+    // 媒体更宽，以容器宽度为准，高度按比例缩放
     displayWidth = containerWidth
-    displayHeight = containerWidth / videoAspectRatio
+    displayHeight = containerWidth / mediaAspectRatio
     offsetX = 0
     offsetY = (containerHeight - displayHeight) / 2
   } else {
-    // 视频更高或比例相同，以容器高度为准，宽度按比例缩放
-    displayWidth = containerHeight * videoAspectRatio
+    // 媒体更高或比例相同，以容器高度为准，宽度按比例缩放
+    displayWidth = containerHeight * mediaAspectRatio
     displayHeight = containerHeight
     offsetX = (containerWidth - displayWidth) / 2
     offsetY = 0
   }
   
-  console.log('📐 视频显示计算详情:', {
-    videoOriginal: { 
-      width: videoWidth, 
-      height: videoHeight, 
-      aspectRatio: videoAspectRatio.toFixed(3) 
+  console.log(`📐 ${isCurrentInferenceImage.value ? '图像' : '视频'}显示计算详情:`, {
+    mediaOriginal: { 
+      width: mediaWidth, 
+      height: mediaHeight, 
+      aspectRatio: mediaAspectRatio.toFixed(3) 
     },
     container: { 
       width: containerWidth, 
       height: containerHeight, 
       aspectRatio: containerAspectRatio.toFixed(3) 
     },
-    comparison: {
-      videoWider: videoAspectRatio > containerAspectRatio,
-      ratiosDiff: (videoAspectRatio - containerAspectRatio).toFixed(3)
-    },
     actualDisplay: { 
       width: Math.round(displayWidth), 
       height: Math.round(displayHeight), 
       offsetX: Math.round(offsetX), 
       offsetY: Math.round(offsetY) 
-    },
-    blackBars: {
-      top: Math.round(offsetY),
-      bottom: Math.round(offsetY),
-      left: Math.round(offsetX),
-      right: Math.round(offsetX)
-    },
-    videoSrc: video.src.split('/').pop()
+    }
   })
   
   // 设置canvas尺寸与容器一致
@@ -796,13 +945,6 @@ function drawBboxOverlay() {
   
   // 清除之前的绘制
   ctx.clearRect(0, 0, canvas.width, canvas.height)
-  
-  // 可选：绘制视频显示区域的边界（调试用）
-  if (import.meta.env.DEV) {
-    ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)'
-    ctx.lineWidth = 2
-    ctx.strokeRect(offsetX, offsetY, displayWidth, displayHeight)
-  }
   
   if (!showBbox.value || (!currentInference.value.people && !currentInference.value.vehicles)) return
   
@@ -827,54 +969,17 @@ function drawBboxOverlay() {
       
       const [x1, y1, x2, y2] = person.bbox
       
-      // 验证bbox坐标有效性
-      if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1 || x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1) {
-        console.warn(`⚠️ 人员${index + 1} bbox坐标超出范围:`, person.bbox)
-      }
-      
-      // 将归一化坐标转换为视频实际显示区域的坐标
+      // 将归一化坐标转换为媒体实际显示区域的坐标
       const boxX = offsetX + x1 * displayWidth
       const boxY = offsetY + y1 * displayHeight
       const boxWidth = (x2 - x1) * displayWidth
       const boxHeight = (y2 - y1) * displayHeight
       
-      // 边界检查（确保在视频显示区域内）
+      // 边界检查（确保在媒体显示区域内）
       const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
       const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
       const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
       const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
-      
-      console.log(`👤 人员${index + 1} bbox详情:`, {
-        originalBbox: person.bbox,
-        normalizedCoords: { x1: x1.toFixed(3), y1: y1.toFixed(3), x2: x2.toFixed(3), y2: y2.toFixed(3) },
-        calculatedCoords: { 
-          boxX: Math.round(boxX), 
-          boxY: Math.round(boxY), 
-          boxWidth: Math.round(boxWidth), 
-          boxHeight: Math.round(boxHeight) 
-        },
-        clampedCoords: {
-          boxX: Math.round(clampedBoxX),
-          boxY: Math.round(clampedBoxY),
-          boxWidth: Math.round(clampedBoxWidth),
-          boxHeight: Math.round(clampedBoxHeight)
-        },
-        activity: person.activity,
-        withinVideoArea: {
-          x: boxX >= offsetX && (boxX + boxWidth) <= (offsetX + displayWidth),
-          y: boxY >= offsetY && (boxY + boxHeight) <= (offsetY + displayHeight)
-        },
-        adjustmentNeeded: {
-          x: boxX !== clampedBoxX || boxWidth !== clampedBoxWidth,
-          y: boxY !== clampedBoxY || boxHeight !== clampedBoxHeight
-        }
-      })
-      
-      // 使用修正后的坐标
-      const finalBoxX = clampedBoxX
-      const finalBoxY = clampedBoxY
-      const finalBoxWidth = clampedBoxWidth
-      const finalBoxHeight = clampedBoxHeight
       
       // 设置人员样式（红色）
       ctx.strokeStyle = '#ff4757'
@@ -882,8 +987,8 @@ function drawBboxOverlay() {
       ctx.fillStyle = 'rgba(255, 71, 87, 0.1)'
       
       // 绘制矩形
-      ctx.fillRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
-      ctx.strokeRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
+      ctx.fillRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
+      ctx.strokeRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
       
       // 绘制标签
       const label = `人${person.id || (index + 1)}: ${person.activity || '未知'}`
@@ -892,8 +997,8 @@ function drawBboxOverlay() {
       
       // 标签背景
       const textMetrics = ctx.measureText(label)
-      const labelX = Math.max(offsetX, Math.min(finalBoxX, offsetX + displayWidth - textMetrics.width - 8))
-      const labelY = Math.max(offsetY + 20, finalBoxY)
+      const labelX = Math.max(offsetX, Math.min(clampedBoxX, offsetX + displayWidth - textMetrics.width - 8))
+      const labelY = Math.max(offsetY + 20, clampedBoxY)
       
       ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
       
@@ -910,55 +1015,17 @@ function drawBboxOverlay() {
       
       const [x1, y1, x2, y2] = vehicle.bbox
       
-      // 验证bbox坐标有效性
-      if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1 || x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1) {
-        console.warn(`⚠️ 车辆${index + 1} bbox坐标超出范围:`, vehicle.bbox)
-      }
-      
-      // 将归一化坐标转换为视频实际显示区域的坐标
+      // 将归一化坐标转换为媒体实际显示区域的坐标
       const boxX = offsetX + x1 * displayWidth
       const boxY = offsetY + y1 * displayHeight
       const boxWidth = (x2 - x1) * displayWidth
       const boxHeight = (y2 - y1) * displayHeight
       
-      // 边界检查（确保在视频显示区域内）
+      // 边界检查（确保在媒体显示区域内）
       const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
       const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
       const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
       const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
-      
-      console.log(`🚗 车辆${index + 1} bbox详情:`, {
-        originalBbox: vehicle.bbox,
-        type: vehicle.type,
-        status: vehicle.status,
-        normalizedCoords: { x1: x1.toFixed(3), y1: y1.toFixed(3), x2: x2.toFixed(3), y2: y2.toFixed(3) },
-        calculatedCoords: { 
-          boxX: Math.round(boxX), 
-          boxY: Math.round(boxY), 
-          boxWidth: Math.round(boxWidth), 
-          boxHeight: Math.round(boxHeight) 
-        },
-        clampedCoords: {
-          boxX: Math.round(clampedBoxX),
-          boxY: Math.round(clampedBoxY),
-          boxWidth: Math.round(clampedBoxWidth),
-          boxHeight: Math.round(clampedBoxHeight)
-        },
-        withinVideoArea: {
-          x: boxX >= offsetX && (boxX + boxWidth) <= (offsetX + displayWidth),
-          y: boxY >= offsetY && (boxY + boxHeight) <= (offsetY + displayHeight)
-        },
-        adjustmentNeeded: {
-          x: boxX !== clampedBoxX || boxWidth !== clampedBoxWidth,
-          y: boxY !== clampedBoxY || boxHeight !== clampedBoxHeight
-        }
-      })
-      
-      // 使用修正后的坐标
-      const finalBoxX = clampedBoxX
-      const finalBoxY = clampedBoxY
-      const finalBoxWidth = clampedBoxWidth
-      const finalBoxHeight = clampedBoxHeight
       
       // 设置车辆样式（绿色）
       ctx.strokeStyle = '#2ed573'
@@ -966,8 +1033,8 @@ function drawBboxOverlay() {
       ctx.fillStyle = 'rgba(46, 213, 115, 0.1)'
       
       // 绘制矩形
-      ctx.fillRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
-      ctx.strokeRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
+      ctx.fillRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
+      ctx.strokeRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
       
       // 绘制标签
       const label = `${vehicle.type || '车辆'}${vehicle.id || (index + 1)}: ${vehicle.status || '未知'}`
@@ -976,8 +1043,8 @@ function drawBboxOverlay() {
       
       // 标签背景
       const textMetrics = ctx.measureText(label)
-      const labelX = Math.max(offsetX, Math.min(finalBoxX, offsetX + displayWidth - textMetrics.width - 8))
-      const labelY = Math.max(offsetY + 20, finalBoxY)
+      const labelX = Math.max(offsetX, Math.min(clampedBoxX, offsetX + displayWidth - textMetrics.width - 8))
+      const labelY = Math.max(offsetY + 20, clampedBoxY)
       
       ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
       
@@ -1138,6 +1205,150 @@ function onVideoLoadStart() {
     video_url: videoUrl,
     video_id: currentInference.value?.video_id
   })
+}
+
+// 图像相关处理函数
+function onImageLoaded() {
+  const image = document.querySelector('.inference-image') as HTMLImageElement
+  if (!image) return
+  
+  console.log('🖼️ 推理图像加载完成:', {
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+    clientWidth: image.clientWidth,
+    clientHeight: image.clientHeight,
+    src: image.src
+  })
+  
+  // 图像加载完成后绘制bbox
+  nextTick(() => {
+    drawBboxOverlay()
+  })
+}
+
+function onImageError(event: Event) {
+  const image = event.target as HTMLImageElement
+  console.error('❌ 图像加载错误:', {
+    src: image.src,
+    currentInference: currentInference.value?.filename
+  })
+}
+
+// 历史记录相关函数
+async function loadMediaHistory() {
+  isLoadingHistory.value = true
+  try {
+    console.log('🔄 加载媒体历史记录...')
+    const response = await apiService.getMediaHistory(30)
+    if (response.success && response.data) {
+      const newMediaHistory = response.data.media_items || []
+      console.log('✅ 媒体历史记录加载成功:', newMediaHistory.length, '项')
+      
+      // 检查是否有新的媒体项目
+      const hasNewItems = newMediaHistory.length > mediaHistory.value.length ||
+        (newMediaHistory.length > 0 && mediaHistory.value.length > 0 && 
+         newMediaHistory[0].filename !== mediaHistory.value[0].filename)
+      
+      mediaHistory.value = newMediaHistory
+      
+      // 如果有新项目或者当前没有选中项目，自动选择最新的有推理结果的项目
+      if (hasNewItems || !selectedHistoryItem.value) {
+        autoSelectLatestInferenceItem()
+      }
+    } else {
+      console.warn('⚠️ 媒体历史记录加载失败:', response.error)
+      mediaHistory.value = []
+    }
+  } catch (error) {
+    console.error('❌ 加载媒体历史记录失败:', error)
+    mediaHistory.value = []
+  } finally {
+    isLoadingHistory.value = false
+  }
+}
+
+function autoSelectLatestInferenceItem() {
+  // 查找最新的有推理结果的项目（按时间戳排序，最新的在前）
+  const inferenceItems = mediaHistory.value.filter(item => item.has_inference_result)
+  const latestInferenceItem = inferenceItems.length > 0 ? inferenceItems[0] : null
+  
+  if (latestInferenceItem) {
+    // 只有当选中的项目不同时才切换
+    if (!selectedHistoryItem.value || selectedHistoryItem.value.filename !== latestInferenceItem.filename) {
+      console.log('🎯 自动选择最新的推理结果:', {
+        filename: latestInferenceItem.filename,
+        type: latestInferenceItem.type,
+        people_count: latestInferenceItem.people_count || 0,
+        vehicle_count: latestInferenceItem.vehicle_count || 0,
+        time: formatHistoryTime(latestInferenceItem.timestamp || latestInferenceItem.creation_timestamp)
+      })
+      selectHistoryItem(latestInferenceItem)
+    } else {
+      console.log('📋 最新推理结果已选中，无需切换')
+    }
+  } else {
+    console.log('📋 暂无推理结果，选择最新的媒体项目')
+    // 如果没有推理结果，选择最新的项目
+    if (mediaHistory.value.length > 0) {
+      const latestItem = mediaHistory.value[0]
+      if (!selectedHistoryItem.value || selectedHistoryItem.value.filename !== latestItem.filename) {
+        console.log('📄 选择最新媒体项目:', latestItem.filename, latestItem.type)
+        selectHistoryItem(latestItem)
+      }
+    }
+  }
+}
+
+function selectHistoryItem(item: any) {
+  selectedHistoryItem.value = item
+  console.log('📋 选择历史项目:', item.filename, item.type)
+  
+  // 更新当前推理结果为选中的历史项目
+  const historyInference = {
+    ...item,
+    video_path: item.media_path,
+    video_id: item.filename.replace(/\.(mp4|jpg|jpeg|png)$/, ''),
+    creation_timestamp: item.timestamp_iso || item.creation_timestamp,
+    has_inference_result: item.has_inference_result
+  }
+  
+  // 使用store的方法来设置当前播放的推理结果
+  store.addInferenceResult(historyInference)
+  
+  console.log('🎬 切换到历史推理结果:', historyInference.video_id)
+}
+
+function getMediaUrl(filename: string): string {
+  return apiService.getMediaUrl(filename)
+}
+
+function formatHistoryTime(timestamp: number | string): string {
+  if (!timestamp) return '未知时间'
+  
+  let date: Date
+  
+  if (typeof timestamp === 'string') {
+    // ISO格式时间戳
+    date = new Date(timestamp)
+  } else {
+    // Unix时间戳（秒）
+    date = new Date(timestamp * 1000)
+  }
+  
+  if (isNaN(date.getTime())) {
+    return '无效时间'
+  }
+  
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
+function onThumbnailError(event: Event) {
+  const target = event.target as HTMLImageElement | HTMLVideoElement
+  console.warn('⚠️ 缩略图加载失败:', target.src)
 }
 </script>
 
@@ -1338,6 +1549,50 @@ function onVideoLoadStart() {
   border-radius: 8px;
 }
 
+/* 图像显示样式 */
+.inference-image-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #000;
+}
+
+.inference-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.inference-video-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #000;
+}
+
+.media-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  border-radius: 0 0 8px 8px;
+  font-size: 12px;
+}
+
+.media-info p {
+  margin: 2px 0;
+}
+
 .video-info {
   position: absolute;
   bottom: 0;
@@ -1352,190 +1607,6 @@ function onVideoLoadStart() {
 
 .video-info p {
   margin: 2px 0;
-}
-
-.info-panel {
-  flex: 1;
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.info-panel h4 {
-  margin: 0 0 16px 0;
-  color: #303133;
-}
-
-.detail-section {
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e6e6e6;
-}
-
-.detail-section:last-child {
-  border-bottom: none;
-}
-
-.detail-section h5 {
-  margin: 0 0 12px 0;
-  color: #303133;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.detail-section h6 {
-  margin: 12px 0 8px 0;
-  color: #606266;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.highlight {
-  color: #409eff;
-  font-weight: 600;
-}
-
-.waiting-message {
-  color: #909399;
-  font-style: italic;
-  margin: 8px 0;
-}
-
-.waiting-hint {
-  color: #c0c4cc;
-  font-size: 12px;
-  margin: 4px 0;
-}
-
-.people-list {
-  margin-top: 12px;
-  padding: 12px;
-  background: #f8f9fa;
-  border-radius: 6px;
-}
-
-.vehicles-list {
-  margin-top: 12px;
-  padding: 12px;
-  background: #f0f9ff;
-  border-radius: 6px;
-}
-
-.person-item {
-  margin-bottom: 12px;
-  padding: 8px;
-  background: white;
-  border-radius: 4px;
-  border: 1px solid #e6e6e6;
-}
-
-.vehicle-item {
-  margin-bottom: 12px;
-  padding: 8px;
-  background: white;
-  border-radius: 4px;
-  border: 1px solid #e6e6e6;
-}
-
-.person-item:last-child,
-.vehicle-item:last-child {
-  margin-bottom: 0;
-}
-
-.person-header,
-.vehicle-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.person-id,
-.vehicle-id {
-  font-weight: 600;
-  color: #303133;
-  font-size: 13px;
-}
-
-.person-activity {
-  font-size: 12px;
-  color: #409eff;
-  background: #f0f9ff;
-  padding: 2px 6px;
-  border-radius: 3px;
-  border: 1px solid #b3d8ff;
-}
-
-.vehicle-status {
-  font-size: 12px;
-  color: #2ed573;
-  background: #f0fff4;
-  padding: 2px 6px;
-  border-radius: 3px;
-  border: 1px solid #95de64;
-}
-
-.person-bbox,
-.vehicle-bbox {
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: #f5f7fa;
-  border-radius: 3px;
-  font-size: 11px;
-  color: #606266;
-  font-family: monospace;
-}
-
-/* 按钮样式 */
-.btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background: #409eff;
-  color: white;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #337ecc;
-}
-
-.btn-danger {
-  background: #f56c6c;
-  color: white;
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: #f24c4c;
-}
-
-.btn-warning {
-  background: #e6a23c;
-  color: white;
-}
-
-.btn-warning:hover:not(:disabled) {
-  background: #cf9236;
-}
-
-.btn-secondary {
-  background: #909399;
-  color: white;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: #82848a;
 }
 
 .video-display {
@@ -1618,6 +1689,171 @@ function onVideoLoadStart() {
 }
 
 .ai-status.pending {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #ef4444;
+}
+
+/* 历史记录区域样式 */
+.history-section {
+  border-top: 1px solid #e6e6e6;
+  background: #f8f9fa;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e6e6e6;
+  background: white;
+}
+
+.history-header h4 {
+  margin: 0;
+  color: #303133;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.history-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.history-count {
+  font-size: 12px;
+  color: #909399;
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.history-container {
+  height: 200px;
+  overflow: hidden;
+}
+
+.history-placeholder {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.history-scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-item {
+  display: flex;
+  gap: 12px;
+  padding: 8px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #e6e6e6;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.history-item:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 4px rgba(64, 158, 255, 0.1);
+}
+
+.history-item.active {
+  border-color: #409eff;
+  background: #f0f9ff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.2);
+}
+
+.history-thumbnail {
+  position: relative;
+  width: 60px;
+  height: 45px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f0f0f0;
+  flex-shrink: 0;
+}
+
+.thumbnail-image img,
+.thumbnail-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media-type-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 10px;
+  padding: 1px 3px;
+  border-radius: 2px;
+}
+
+.media-type-badge.image {
+  background: rgba(46, 213, 115, 0.8);
+}
+
+.media-type-badge.video {
+  background: rgba(64, 158, 255, 0.8);
+}
+
+.history-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.history-title {
+  font-weight: 500;
+  color: #303133;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-time {
+  font-size: 11px;
+  color: #909399;
+}
+
+.history-status {
+  margin-top: 2px;
+}
+
+.status-badge {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+.status-badge.success {
+  background: #f0f9ff;
+  color: #0369a1;
+  border: 1px solid #0ea5e9;
+}
+
+.status-badge.pending {
   background: #fef2f2;
   color: #dc2626;
   border: 1px solid #ef4444;

@@ -91,6 +91,16 @@ export const apiService = {
   // 清空历史数据
   async clearHistory(): Promise<ApiResponse> {
     return apiRequest('/history', { method: 'DELETE' })
+  },
+
+  // 获取媒体历史记录（图像和视频）
+  async getMediaHistory(limit = 50): Promise<ApiResponse> {
+    return apiRequest(`/media-history?limit=${limit}`)
+  },
+
+  // 获取媒体文件URL
+  getMediaUrl(filename: string): string {
+    return `/api/media/${filename}`
   }
 }
 
