@@ -1,8 +1,8 @@
 {
   "video_processing": {
     "target_video_duration": 3.0,
-    "frames_per_second": 1,
-    "target_frames_per_video": 8,
+    "frames_per_second": 5,
+    "target_frames_per_video": 15,
     "enable_frame_resize": true,
     "target_width": 640,
     "target_height": 360,
@@ -24,13 +24,13 @@
     },
     "tcp": {
       "host": "172.20.10.4",
-      "port":1234,
-      "video_file": "/home/fze/code/vlm_monitor/data/(3).mp4",
+      "port": 1234,
       "fps": 25.0,
-      "auto_detect_fps": false,
+      "video_file": "data/sample_video.mp4",
       "connection_timeout": 10,
-      "client_buffer_size": 100,
-      "comment": "TCP流处理配置，auto_detect_fps启用时会自动检测真实帧率"
+      "use_backend_client": true,
+      "backend_url": "http://localhost:8080",
+      "frame_rate": 5
     }
   },
   "rtsp": {
@@ -43,7 +43,7 @@
   "vlm": {
     "api_key": "sk-88c79b5d716645f39a44b0e5ce2d4541",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "qwen-vl-max",
+    "model": "qwen-vl-max-2025-04-08",
     "max_concurrent_inferences": 1000,
     "max_video_size_mb": 100,
     "max_base64_size_mb": 10,
@@ -67,4 +67,4 @@
     "collection_timeout": 120,
     "comment": "测试相关配置，n_frames_default是进度报告间隔"
   }
-} 
+}

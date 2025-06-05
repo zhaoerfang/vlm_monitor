@@ -2,6 +2,7 @@
 """
 FastAPI后端服务器
 提供WebSocket视频流和REST API接口
+作为唯一的TCP客户端，内部分发视频流给推理服务
 """
 
 import os
@@ -13,7 +14,7 @@ import base64
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
 import logging
 import queue
@@ -70,6 +71,79 @@ class SystemStatus(BaseModel):
     has_experiment_log: bool
     temp_dir: Optional[str]
 
+# 内部视频流分发器
+class InternalVideoDistributor:
+    def __init__(self):
+        self.subscribers = []  # 订阅者列表
+        self.subscribers_lock = threading.Lock()
+        self.latest_frame = None
+        self.latest_frame_lock = threading.Lock()
+        
+    def subscribe(self, callback: Callable[[np.ndarray, float], bool]) -> str:
+        """
+        订阅视频流
+        
+        Args:
+            callback: 帧处理回调函数 (frame, timestamp) -> bool
+            
+        Returns:
+            订阅ID
+        """
+        subscriber_id = f"subscriber_{int(time.time() * 1000)}_{len(self.subscribers)}"
+        subscriber = {
+            'id': subscriber_id,
+            'callback': callback,
+            'active': True
+        }
+        
+        with self.subscribers_lock:
+            self.subscribers.append(subscriber)
+        
+        logger.info(f"新订阅者: {subscriber_id}, 总订阅者: {len(self.subscribers)}")
+        return subscriber_id
+    
+    def unsubscribe(self, subscriber_id: str):
+        """取消订阅"""
+        with self.subscribers_lock:
+            self.subscribers = [s for s in self.subscribers if s['id'] != subscriber_id]
+        logger.info(f"取消订阅: {subscriber_id}, 剩余订阅者: {len(self.subscribers)}")
+    
+    def distribute_frame(self, frame: np.ndarray, timestamp: float):
+        """分发帧给所有订阅者"""
+        # 更新最新帧
+        with self.latest_frame_lock:
+            self.latest_frame = (frame.copy(), timestamp)
+        
+        # 分发给所有订阅者
+        with self.subscribers_lock:
+            inactive_subscribers = []
+            for subscriber in self.subscribers:
+                if subscriber['active']:
+                    try:
+                        should_continue = subscriber['callback'](frame, timestamp)
+                        if not should_continue:
+                            subscriber['active'] = False
+                            inactive_subscribers.append(subscriber['id'])
+                    except Exception as e:
+                        logger.error(f"订阅者 {subscriber['id']} 回调失败: {e}")
+                        subscriber['active'] = False
+                        inactive_subscribers.append(subscriber['id'])
+            
+            # 移除不活跃的订阅者
+            if inactive_subscribers:
+                self.subscribers = [s for s in self.subscribers if s['id'] not in inactive_subscribers]
+                logger.info(f"移除不活跃订阅者: {inactive_subscribers}")
+    
+    def get_latest_frame(self) -> Optional[tuple]:
+        """获取最新帧"""
+        with self.latest_frame_lock:
+            return self.latest_frame
+    
+    def get_subscriber_count(self) -> int:
+        """获取订阅者数量"""
+        with self.subscribers_lock:
+            return len([s for s in self.subscribers if s['active']])
+
 # 全局状态管理
 class AppState:
     def __init__(self):
@@ -86,6 +160,9 @@ class AppState:
         # 视频帧队列
         self.frame_queue = queue.Queue(maxsize=10)
         self.queue_processor_task: Optional[asyncio.Task] = None
+        
+        # 内部视频流分发器
+        self.video_distributor = InternalVideoDistributor()
         
         # 查找最新的实验目录
         self._find_latest_session_dir()
@@ -444,32 +521,36 @@ async def run_video_stream():
         try:
             logger.debug(f"收到视频帧，尺寸: {frame.shape}")
             
-            # 将OpenCV帧转换为JPEG并编码为base64
+            current_timestamp = time.time()
+            state.frame_count += 1
+            
+            # 分发帧给内部订阅者（推理服务等）
+            state.video_distributor.distribute_frame(frame, current_timestamp)
+            
+            # 将OpenCV帧转换为JPEG并编码为base64（用于WebSocket）
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             frame_base64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
             
-            state.frame_count += 1
             frame_data = {
                 'data': frame_base64,
-                'timestamp': time.time(),
+                'timestamp': current_timestamp,
                 'frame_number': state.frame_count
             }
             state.last_frame = frame_data
             
             # 每帧都输出日志（前10帧）
             if state.frame_count <= 10:
-                logger.info(f"处理第 {state.frame_count} 帧，当前连接客户端: {len(state.connected_clients)}")
+                logger.info(f"处理第 {state.frame_count} 帧，当前连接客户端: {len(state.connected_clients)}, 内部订阅者: {state.video_distributor.get_subscriber_count()}")
             elif state.frame_count % 10 == 0:
-                logger.info(f"已处理 {state.frame_count} 帧，当前连接客户端: {len(state.connected_clients)}")
+                logger.info(f"已处理 {state.frame_count} 帧，当前连接客户端: {len(state.connected_clients)}, 内部订阅者: {state.video_distributor.get_subscriber_count()}")
             
             # 检查是否有连接的客户端
             if len(state.connected_clients) == 0:
-                logger.warning("没有连接的WebSocket客户端，跳过广播")
-                return True
-            
-            # 将帧数据添加到队列
-            state.add_frame_to_queue(frame_data)
-            logger.debug(f"已添加第 {state.frame_count} 帧到队列")
+                logger.debug("没有连接的WebSocket客户端，跳过广播")
+            else:
+                # 将帧数据添加到队列
+                state.add_frame_to_queue(frame_data)
+                logger.debug(f"已添加第 {state.frame_count} 帧到队列")
             
             return True
             
@@ -1038,6 +1119,87 @@ async def debug_videos():
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "timestamp": time.time()}
+
+# 内部视频流API - 供推理服务使用
+@app.post("/internal/video/subscribe", response_model=ApiResponse)
+async def subscribe_to_video_stream(request: Request):
+    """内部API：订阅视频流"""
+    try:
+        # 这里我们返回一个订阅ID，实际的回调需要通过其他方式设置
+        # 在实际实现中，推理服务会通过其他方式注册回调
+        subscriber_id = f"internal_{int(time.time() * 1000)}"
+        
+        return ApiResponse(
+            success=True,
+            data={
+                "subscriber_id": subscriber_id,
+                "message": "订阅成功，请通过内部接口设置回调"
+            },
+            timestamp=time.time()
+        )
+    except Exception as e:
+        return ApiResponse(
+            success=False,
+            error=f"订阅视频流失败: {str(e)}",
+            timestamp=time.time()
+        )
+
+@app.get("/internal/video/latest-frame")
+async def get_latest_frame():
+    """内部API：获取最新帧"""
+    try:
+        latest_frame = state.video_distributor.get_latest_frame()
+        if latest_frame is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "没有可用的视频帧"}
+            )
+        
+        frame, timestamp = latest_frame
+        
+        # 将帧编码为JPEG并转换为base64
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        frame_base64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+        
+        return {
+            "frame_data": frame_base64,
+            "timestamp": timestamp,
+            "frame_number": state.frame_count
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"获取最新帧失败: {str(e)}"}
+        )
+
+@app.get("/internal/video/status")
+async def get_internal_video_status():
+    """内部API：获取视频流状态"""
+    return {
+        "streaming": state.streaming,
+        "subscriber_count": state.video_distributor.get_subscriber_count(),
+        "frame_count": state.frame_count,
+        "has_latest_frame": state.video_distributor.get_latest_frame() is not None
+    }
+
+# 提供给推理服务的直接接口
+def register_inference_callback(callback: Callable[[np.ndarray, float], bool]) -> str:
+    """
+    为推理服务注册视频帧回调
+    这个函数会被推理服务直接调用
+    
+    Args:
+        callback: 帧处理回调函数
+        
+    Returns:
+        订阅ID
+    """
+    return state.video_distributor.subscribe(callback)
+
+def unregister_inference_callback(subscriber_id: str):
+    """取消推理服务的视频帧订阅"""
+    state.video_distributor.unsubscribe(subscriber_id)
 
 if __name__ == "__main__":
     import uvicorn

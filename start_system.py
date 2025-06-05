@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 简化的视频监控系统启动脚本
+支持传统模式和后端视频客户端模式
 """
 
 import os
@@ -28,8 +29,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class SimpleSystemManager:
-    def __init__(self, test_mode: bool = False):
+    def __init__(self, test_mode: bool = False, backend_client_mode: bool = False):
         self.test_mode = test_mode
+        self.backend_client_mode = backend_client_mode
         self.processes = {}
         
         # 从配置文件读取TCP端口
@@ -47,6 +49,50 @@ class SimpleSystemManager:
         except Exception as e:
             logger.warning(f"读取配置文件失败，使用默认TCP端口8888: {e}")
             return 8888
+    
+    def _update_config_for_backend_client(self):
+        """更新配置文件以使用后端视频客户端模式"""
+        if not self.backend_client_mode:
+            return True
+            
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # 启用后端视频客户端模式
+            config['stream']['tcp']['use_backend_client'] = True
+            
+            # 保存更新的配置，确保保持原有格式
+            with open('config.json', 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2, separators=(',', ': '))
+            
+            logger.info("✅ 配置文件已更新为后端视频客户端模式")
+            return True
+        except Exception as e:
+            logger.error(f"更新配置文件失败: {e}")
+            return False
+    
+    def _restore_config_for_traditional_mode(self):
+        """恢复配置文件为传统模式"""
+        if self.backend_client_mode:
+            return True
+            
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # 禁用后端视频客户端模式
+            config['stream']['tcp']['use_backend_client'] = False
+            
+            # 保存更新的配置，确保保持原有格式
+            with open('config.json', 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2, separators=(',', ': '))
+            
+            logger.info("✅ 配置文件已恢复为传统模式")
+            return True
+        except Exception as e:
+            logger.error(f"恢复配置文件失败: {e}")
+            return False
         
     def kill_port_processes(self, port: int):
         """杀死占用指定端口的进程"""
@@ -95,32 +141,63 @@ class SimpleSystemManager:
     
     def start_all(self):
         """启动所有服务"""
-        logger.info("🚀 启动视频监控系统...")
+        if self.backend_client_mode:
+            logger.info("🚀 启动视频监控系统（后端视频客户端模式）...")
+        else:
+            logger.info("🚀 启动视频监控系统（传统模式）...")
+        
+        # 0. 更新配置文件
+        if self.backend_client_mode:
+            if not self._update_config_for_backend_client():
+                return False
+        else:
+            if not self._restore_config_for_traditional_mode():
+                return False
         
         # 1. 清理端口
         self.cleanup_ports()
         
-        # 2. 启动推理服务（测试模式先启动TCP视频服务）
+        # 获取配置文件的绝对路径
+        config_path = os.path.abspath('config.json')
+        
+        # 2. 启动TCP视频服务（测试模式）
         if self.test_mode:
             if not self.start_service(
                 "TCP_video_service", 
-                [sys.executable, 'tools/tcp_video_service.py', '--config', 'config.json']
+                [sys.executable, 'tools/tcp_video_service.py', '--config', config_path]
             ):
                 return False
             time.sleep(2)  # 等待TCP服务启动
         
-        if not self.start_service(
-            "Inference_service",
-            ['vlm-monitor', '--config', 'config.json']
-        ):
-            return False
-        
-        # 3. 启动后端服务
-        if not self.start_service(
-            "Backend_service",
-            [sys.executable, 'backend/app.py']
-        ):
-            return False
+        # 3. 根据模式选择启动顺序
+        if self.backend_client_mode:
+            # 后端视频客户端模式：先启动后端服务，再启动推理服务
+            if not self.start_service(
+                "Backend_service",
+                [sys.executable, 'backend/app.py']
+            ):
+                return False
+            
+            time.sleep(3)  # 等待后端服务完全启动
+            
+            if not self.start_service(
+                "Inference_service",
+                ['vlm-monitor', '--config', config_path]
+            ):
+                return False
+        else:
+            # 传统模式：先启动推理服务，再启动后端服务
+            if not self.start_service(
+                "Inference_service",
+                ['vlm-monitor', '--config', config_path]
+            ):
+                return False
+            
+            if not self.start_service(
+                "Backend_service",
+                [sys.executable, 'backend/app.py']
+            ):
+                return False
         
         # 4. 启动前端服务
         if not self.start_service(
@@ -136,6 +213,11 @@ class SimpleSystemManager:
         logger.info("🔧 后端API: http://localhost:8080")
         if self.test_mode:
             logger.info(f"📹 TCP视频流: tcp://localhost:{self.tcp_port}")
+        
+        if self.backend_client_mode:
+            logger.info("🔄 架构模式: 后端作为唯一TCP客户端，推理服务通过后端获取视频流")
+        else:
+            logger.info("🔄 架构模式: 传统模式，后端和推理服务分别连接TCP")
         
         return True
     
@@ -179,10 +261,12 @@ def main():
     parser = argparse.ArgumentParser(description='简化的视频监控系统启动脚本')
     parser.add_argument('--test', '-t', action='store_true', help='测试模式（启动TCP视频服务）')
     parser.add_argument('--stop', '-s', action='store_true', help='仅清理端口')
+    parser.add_argument('--backend-client', '-b', action='store_true', 
+                       help='后端视频客户端模式（解决TCP连接冲突）')
     
     args = parser.parse_args()
     
-    manager = SimpleSystemManager(test_mode=args.test)
+    manager = SimpleSystemManager(test_mode=args.test, backend_client_mode=args.backend_client)
     signal_handler.manager = manager
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)

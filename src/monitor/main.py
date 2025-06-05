@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VLM视频监控主程序
-支持RTSP和TCP两种流媒体输入，基于配置文件运行
+支持RTSP和TCP视频流，可选择直接TCP连接或通过后端服务获取视频流
 """
 
 import os
@@ -10,13 +10,14 @@ import time
 import signal
 import logging
 import threading
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-# 添加当前目录到Python路径
-current_dir = Path(__file__).parent.parent
-sys.path.insert(0, str(current_dir))
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent.parent
+sys.path.append(str(project_root))
 
 from monitor.core.config import load_config
 from monitor.rtsp.rtsp_server import RTSPServer
@@ -27,6 +28,7 @@ from monitor.tcp.tcp_client import TCPVideoClient
 from monitor.tcp.tcp_utils import create_tcp_client_config, detect_tcp_fps
 from monitor.vlm.vlm_client import DashScopeVLMClient
 from monitor.vlm.async_video_processor import AsyncVideoProcessor
+from monitor.vlm.backend_video_client import BackendVideoClient
 
 # 配置日志
 logging.basicConfig(
@@ -42,92 +44,71 @@ logger = logging.getLogger(__name__)
 class VLMMonitor:
     def __init__(self, config_path: Optional[str] = None):
         """
-        初始化VLM监控器
+        初始化VLM监控系统
         
         Args:
-            config_path: 配置文件路径，如果为None则使用默认搜索
+            config_path: 配置文件路径
         """
         # 加载配置
         self.config = load_config(Path(config_path) if config_path else None)
         
-        # 设置日志级别
-        log_level = self.config.get('monitoring', {}).get('log_level', 'INFO')
-        logging.getLogger().setLevel(getattr(logging, log_level))
+        # 创建会话目录
+        self.session_dir = self._create_session_dir()
         
         # 初始化组件
         self.vlm_client = None
         self.processor = None
-        self.stream_server = None
         self.stream_client = None
+        self.stream_server = None
+        
+        # 运行状态
         self.running = False
         
-        # 输出目录
-        self.output_dir = Path(self.config.get('monitoring', {}).get('output_dir', 'output'))
-        self.output_dir.mkdir(exist_ok=True)
-        
-        # 创建会话目录
-        session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        self.session_dir = self.output_dir / session_name
-        self.session_dir.mkdir(exist_ok=True)
-        
-        logger.info(f"VLM监控器初始化完成，会话目录: {self.session_dir}")
+        logger.info(f"VLM监控系统初始化完成")
+        logger.info(f"会话目录: {self.session_dir}")
+        logger.info(f"配置文件: {config_path or '默认配置'}")
+
+    def _create_session_dir(self) -> Path:
+        """创建会话目录"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_dir = Path("tmp") / f"session_{timestamp}"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"创建会话目录: {session_dir}")
+        return session_dir
 
     def _setup_vlm_client(self):
         """设置VLM客户端"""
         try:
             vlm_config = self.config['vlm']
             self.vlm_client = DashScopeVLMClient(
-                model=vlm_config['model']
+                api_key=vlm_config.get('api_key'),
+                model=vlm_config.get('model', 'qwen-vl-max')
             )
-            
-            if not self.vlm_client.api_key:
-                raise ValueError("VLM客户端无法获取API密钥")
-            
-            logger.info(f"✅ VLM客户端已初始化，模型: {vlm_config['model']}")
+            logger.info(f"✅ VLM客户端已创建: {vlm_config.get('model', 'qwen-vl-max')}")
             return True
-            
         except Exception as e:
-            logger.error(f"❌ VLM客户端初始化失败: {str(e)}")
+            logger.error(f"❌ VLM客户端创建失败: {str(e)}")
             return False
 
     def _setup_async_processor(self):
         """设置异步视频处理器"""
         try:
-            # 确保VLM客户端已初始化
-            if self.vlm_client is None:
-                logger.error("VLM客户端未初始化")
-                return False
-                
-            video_config = self.config['video_processing']
-            vlm_config = self.config['vlm']
-            
-            # 根据流媒体类型确定原始帧率
-            stream_config = self.config['stream']
-            if stream_config['type'] == 'rtsp':
-                if stream_config['rtsp']['use_local_server']:
-                    original_fps = self.config['rtsp']['default_fps']
-                else:
-                    # 检测RTSP流帧率
-                    original_fps = detect_rtsp_fps(stream_config['rtsp']['url'], self.config)
-            else:  # TCP
-                # 对于TCP流，使用动态检测的帧率
-                tcp_config = stream_config['tcp']
-                original_fps = detect_tcp_fps(tcp_config['host'], tcp_config['port'], self.config)
+            video_config = self.config.get('video_processing', {})
+            vlm_config = self.config.get('vlm', {})
             
             self.processor = AsyncVideoProcessor(
                 vlm_client=self.vlm_client,
                 temp_dir=str(self.session_dir),
-                target_video_duration=video_config['target_video_duration'],
-                frames_per_second=video_config['frames_per_second'],
-                original_fps=original_fps,
-                max_concurrent_inferences=vlm_config['max_concurrent_inferences']
+                target_video_duration=video_config.get('target_video_duration'),
+                frames_per_second=video_config.get('frames_per_second'),
+                original_fps=video_config.get('default_fps'),
+                max_concurrent_inferences=vlm_config.get('max_concurrent_inferences')
             )
             
-            logger.info(f"✅ 异步视频处理器已初始化，原始帧率: {original_fps}fps")
+            logger.info("✅ 异步视频处理器已创建")
             return True
-            
         except Exception as e:
-            logger.error(f"❌ 异步视频处理器初始化失败: {str(e)}")
+            logger.error(f"❌ 异步视频处理器创建失败: {str(e)}")
             return False
 
     def _setup_rtsp_stream(self):
@@ -136,33 +117,15 @@ class VLMMonitor:
             stream_config = self.config['stream']
             rtsp_config = stream_config['rtsp']
             
-            if rtsp_config['use_local_server']:
-                # 启动本地RTSP服务器
-                local_config = rtsp_config['local_server']
-                self.stream_server = RTSPServer(
-                    video_path=local_config['video_file'],
-                    port=local_config['port'],
-                    stream_name=local_config['stream_name']
-                )
-                rtsp_url = self.stream_server.start()
-                logger.info(f"✅ 本地RTSP服务器已启动: {rtsp_url}")
-                
-                # 等待服务器启动
-                time.sleep(2)
-            else:
-                rtsp_url = rtsp_config['url']
-                logger.info(f"使用外部RTSP流: {rtsp_url}")
-            
             # 创建RTSP客户端
-            rtsp_client_config = self.config['rtsp']
             self.stream_client = RTSPClient(
-                rtsp_url=rtsp_url,
-                frame_rate=5,  # 客户端目标帧率
-                timeout=rtsp_client_config['connection_timeout'],
-                buffer_size=rtsp_client_config['client_buffer_size']
+                rtsp_url=rtsp_config['url'],
+                frame_rate=rtsp_config.get('frame_rate', 5),
+                buffer_size=rtsp_config.get('buffer_size', 10),
+                timeout=rtsp_config.get('timeout', 30)
             )
             
-            logger.info(f"✅ RTSP客户端已创建")
+            logger.info(f"✅ RTSP客户端已创建: {rtsp_config['url']}")
             return True
             
         except Exception as e:
@@ -175,26 +138,45 @@ class VLMMonitor:
             stream_config = self.config['stream']
             tcp_config = stream_config['tcp']
             
-            # 不再启动内置TCP服务器，假设外部TCP服务器已经运行
-            logger.info(f"连接到外部TCP视频服务器: {tcp_config['host']}:{tcp_config['port']}")
+            # 检查是否使用后端视频客户端
+            use_backend_client = tcp_config.get('use_backend_client', False)
             
-            # 创建TCP客户端配置（包含动态帧率检测）
-            client_config = create_tcp_client_config(
-                host=tcp_config['host'],
-                port=tcp_config['port'],
-                config=self.config
-            )
+            if use_backend_client:
+                # 使用后端视频客户端
+                backend_url = tcp_config.get('backend_url', 'http://localhost:8080')
+                frame_rate = tcp_config.get('frame_rate', 5)
+                
+                logger.info(f"使用后端视频客户端: {backend_url}")
+                
+                self.stream_client = BackendVideoClient(
+                    backend_url=backend_url,
+                    frame_rate=frame_rate,
+                    timeout=tcp_config.get('connection_timeout', 10)
+                )
+                
+                logger.info(f"✅ 后端视频客户端已创建，帧率: {frame_rate}fps")
+            else:
+                # 直接TCP连接
+                logger.info(f"直接连接TCP视频服务器: {tcp_config['host']}:{tcp_config['port']}")
+                
+                # 创建TCP客户端配置（包含动态帧率检测）
+                client_config = create_tcp_client_config(
+                    host=tcp_config['host'],
+                    port=tcp_config['port'],
+                    config=self.config
+                )
+                
+                # 创建TCP客户端
+                self.stream_client = TCPVideoClient(
+                    host=client_config['host'],
+                    port=client_config['port'],
+                    frame_rate=int(client_config['frame_rate']),  # 使用动态检测的帧率
+                    timeout=client_config['timeout'],
+                    buffer_size=client_config['buffer_size']
+                )
+                
+                logger.info(f"✅ TCP客户端已创建，使用帧率: {client_config['frame_rate']:.2f}fps")
             
-            # 创建TCP客户端
-            self.stream_client = TCPVideoClient(
-                host=client_config['host'],
-                port=client_config['port'],
-                frame_rate=int(client_config['frame_rate']),  # 使用动态检测的帧率
-                timeout=client_config['timeout'],
-                buffer_size=client_config['buffer_size']
-            )
-            
-            logger.info(f"✅ TCP客户端已创建，使用帧率: {client_config['frame_rate']:.2f}fps")
             return True
             
         except Exception as e:
@@ -363,12 +345,11 @@ class VLMMonitor:
                 # RTSP客户端
                 self.stream_client.stop_event.set()
             elif hasattr(self.stream_client, 'disconnect'):
-                # TCP客户端
+                # TCP客户端或后端视频客户端
                 self.stream_client.disconnect()
             else:
                 # 通用停止方法
-                if hasattr(self.stream_client, 'running'):
-                    self.stream_client.running = False
+                self.stream_client.running = False
         
         logger.info(f"✅ 监控已停止，会话数据保存在: {self.session_dir}")
 
