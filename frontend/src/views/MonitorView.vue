@@ -125,7 +125,7 @@
                   
                   <!-- 视频覆盖层用于显示bbox -->
                   <canvas 
-                    v-if="currentInference.has_inference_result && currentInference.people"
+                    v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
                     ref="bboxCanvas"
                     class="bbox-overlay"
                     @click="toggleBboxDisplay"
@@ -167,6 +167,10 @@
                     <span class="highlight">{{ currentInference.people_count || 0 }}人</span>
                   </div>
                   <div class="detail-item">
+                    <label>检测车辆:</label>
+                    <span class="highlight">{{ currentInference.vehicle_count || 0 }}辆</span>
+                  </div>
+                  <div class="detail-item">
                     <label>场景描述:</label>
                     <span>{{ currentInference.summary || '无描述' }}</span>
                   </div>
@@ -179,7 +183,20 @@
                         <span class="person-activity">{{ person.activity || '未知活动' }}</span>
                       </div>
                       <div class="person-bbox" v-if="person.bbox">
-                        位置: [{{ person.bbox.map(v => Math.round(v * 100) / 100).join(', ') }}]
+                        位置: [{{ person.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div v-if="currentInference.vehicles && currentInference.vehicles.length > 0" class="vehicles-list">
+                    <h6>车辆详情</h6>
+                    <div v-for="(vehicle, index) in currentInference.vehicles" :key="index" class="vehicle-item">
+                      <div class="vehicle-header">
+                        <span class="vehicle-id">{{ vehicle.type }} {{ vehicle.id || (index + 1) }}</span>
+                        <span class="vehicle-status">{{ vehicle.status || '未知状态' }}</span>
+                      </div>
+                      <div class="vehicle-bbox" v-if="vehicle.bbox">
+                        位置: [{{ vehicle.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
                       </div>
                     </div>
                   </div>
@@ -228,7 +245,7 @@ const showBbox = ref(true)
 
 const stats = computed(() => store.stats)
 const latestInference = computed(() => store.latestInference)
-const currentInference = computed(() => store.latestInference)
+const currentInference = computed(() => store.playableInference)
 const currentFrame = computed(() => store.currentFrame)
 
 const connectionStatus = computed(() => {
@@ -426,19 +443,25 @@ async function loadInferenceHistory() {
 
 async function loadLatestInference() {
   try {
-    // 首先尝试获取最新的已完成AI分析的推理结果
+    // 优先获取最新的已完成AI分析的推理结果（有inference_result.json的）
     const aiResponse = await apiService.getLatestInferenceWithAI()
     if (aiResponse.success && aiResponse.data) {
-      console.log('🔄 获取到最新AI分析结果:', aiResponse.data.video_id, '时间:', aiResponse.data.creation_timestamp)
+      console.log('🎬 获取到最新AI分析结果用于播放:', aiResponse.data.video_id, '时间:', aiResponse.data.creation_timestamp)
       store.addInferenceResult(aiResponse.data)
       return
     }
     
-    // 如果没有AI分析结果，则获取最新的推理结果（可能还在等待AI分析）
+    // 如果没有AI分析结果，检查是否有任何推理结果（用于显示状态）
     const response = await apiService.getLatestInference()
     if (response.success && response.data) {
-      console.log('🔄 获取到最新推理结果:', response.data.video_id, '时间:', response.data.creation_timestamp)
+      console.log('📋 获取到推理结果（等待AI分析）:', response.data.video_id, '时间:', response.data.creation_timestamp)
+      // 只更新状态，但不用于播放
       store.addInferenceResult(response.data)
+      
+      // 如果没有AI分析结果，继续使用之前有AI分析的结果进行播放
+      if (!response.data.has_inference_result) {
+        console.log('⏳ 当前推理结果还在等待AI分析，继续播放上一个有AI结果的视频')
+      }
     } else {
       console.log('⚠️ 没有获取到推理结果:', response.error)
     }
@@ -713,12 +736,6 @@ function drawBboxOverlay() {
   const containerWidth = video.clientWidth
   const containerHeight = video.clientHeight
   
-  // 验证数据有效性
-  if (!videoWidth || !videoHeight || !containerWidth || !containerHeight) {
-    console.warn('⚠️ 视频或容器尺寸无效:', { videoWidth, videoHeight, containerWidth, containerHeight })
-    return
-  }
-  
   // 计算视频在容器中的实际显示尺寸和位置（考虑object-fit: contain）
   const videoAspectRatio = videoWidth / videoHeight
   const containerAspectRatio = containerWidth / containerHeight
@@ -787,10 +804,14 @@ function drawBboxOverlay() {
     ctx.strokeRect(offsetX, offsetY, displayWidth, displayHeight)
   }
   
-  if (!showBbox.value || !currentInference.value.people) return
+  if (!showBbox.value || (!currentInference.value.people && !currentInference.value.vehicles)) return
+  
+  const totalObjects = (currentInference.value.people?.length || 0) + (currentInference.value.vehicles?.length || 0)
   
   console.log('📏 bbox绘制信息:', {
-    peopleCount: currentInference.value.people.length,
+    peopleCount: currentInference.value.people?.length || 0,
+    vehicleCount: currentInference.value.vehicles?.length || 0,
+    totalObjects: totalObjects,
     displayArea: { 
       width: Math.round(displayWidth), 
       height: Math.round(displayHeight), 
@@ -800,85 +821,171 @@ function drawBboxOverlay() {
   })
   
   // 绘制每个人的bbox
-  currentInference.value.people.forEach((person: any, index: number) => {
-    if (!person.bbox) return
-    
-    const [x1, y1, x2, y2] = person.bbox
-    
-    // 验证bbox坐标有效性
-    if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1 || x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1) {
-      console.warn(`⚠️ 人员${index + 1} bbox坐标超出范围:`, person.bbox)
-    }
-    
-    // 将归一化坐标转换为视频实际显示区域的坐标
-    const boxX = offsetX + x1 * displayWidth
-    const boxY = offsetY + y1 * displayHeight
-    const boxWidth = (x2 - x1) * displayWidth
-    const boxHeight = (y2 - y1) * displayHeight
-    
-    // 边界检查（确保在视频显示区域内）
-    const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
-    const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
-    const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
-    const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
-    
-    console.log(`👤 人员${index + 1} bbox详情:`, {
-      originalBbox: person.bbox,
-      normalizedCoords: { x1: x1.toFixed(3), y1: y1.toFixed(3), x2: x2.toFixed(3), y2: y2.toFixed(3) },
-      calculatedCoords: { 
-        boxX: Math.round(boxX), 
-        boxY: Math.round(boxY), 
-        boxWidth: Math.round(boxWidth), 
-        boxHeight: Math.round(boxHeight) 
-      },
-      clampedCoords: {
-        boxX: Math.round(clampedBoxX),
-        boxY: Math.round(clampedBoxY),
-        boxWidth: Math.round(clampedBoxWidth),
-        boxHeight: Math.round(clampedBoxHeight)
-      },
-      activity: person.activity,
-      withinVideoArea: {
-        x: boxX >= offsetX && (boxX + boxWidth) <= (offsetX + displayWidth),
-        y: boxY >= offsetY && (boxY + boxHeight) <= (offsetY + displayHeight)
-      },
-      adjustmentNeeded: {
-        x: boxX !== clampedBoxX || boxWidth !== clampedBoxWidth,
-        y: boxY !== clampedBoxY || boxHeight !== clampedBoxHeight
+  if (currentInference.value.people) {
+    currentInference.value.people.forEach((person: any, index: number) => {
+      if (!person.bbox) return
+      
+      const [x1, y1, x2, y2] = person.bbox
+      
+      // 验证bbox坐标有效性
+      if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1 || x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1) {
+        console.warn(`⚠️ 人员${index + 1} bbox坐标超出范围:`, person.bbox)
       }
+      
+      // 将归一化坐标转换为视频实际显示区域的坐标
+      const boxX = offsetX + x1 * displayWidth
+      const boxY = offsetY + y1 * displayHeight
+      const boxWidth = (x2 - x1) * displayWidth
+      const boxHeight = (y2 - y1) * displayHeight
+      
+      // 边界检查（确保在视频显示区域内）
+      const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
+      const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
+      const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
+      const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
+      
+      console.log(`👤 人员${index + 1} bbox详情:`, {
+        originalBbox: person.bbox,
+        normalizedCoords: { x1: x1.toFixed(3), y1: y1.toFixed(3), x2: x2.toFixed(3), y2: y2.toFixed(3) },
+        calculatedCoords: { 
+          boxX: Math.round(boxX), 
+          boxY: Math.round(boxY), 
+          boxWidth: Math.round(boxWidth), 
+          boxHeight: Math.round(boxHeight) 
+        },
+        clampedCoords: {
+          boxX: Math.round(clampedBoxX),
+          boxY: Math.round(clampedBoxY),
+          boxWidth: Math.round(clampedBoxWidth),
+          boxHeight: Math.round(clampedBoxHeight)
+        },
+        activity: person.activity,
+        withinVideoArea: {
+          x: boxX >= offsetX && (boxX + boxWidth) <= (offsetX + displayWidth),
+          y: boxY >= offsetY && (boxY + boxHeight) <= (offsetY + displayHeight)
+        },
+        adjustmentNeeded: {
+          x: boxX !== clampedBoxX || boxWidth !== clampedBoxWidth,
+          y: boxY !== clampedBoxY || boxHeight !== clampedBoxHeight
+        }
+      })
+      
+      // 使用修正后的坐标
+      const finalBoxX = clampedBoxX
+      const finalBoxY = clampedBoxY
+      const finalBoxWidth = clampedBoxWidth
+      const finalBoxHeight = clampedBoxHeight
+      
+      // 设置人员样式（红色）
+      ctx.strokeStyle = '#ff4757'
+      ctx.lineWidth = 3
+      ctx.fillStyle = 'rgba(255, 71, 87, 0.1)'
+      
+      // 绘制矩形
+      ctx.fillRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
+      ctx.strokeRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
+      
+      // 绘制标签
+      const label = `人${person.id || (index + 1)}: ${person.activity || '未知'}`
+      ctx.fillStyle = '#ff4757'
+      ctx.font = '14px Arial'
+      
+      // 标签背景
+      const textMetrics = ctx.measureText(label)
+      const labelX = Math.max(offsetX, Math.min(finalBoxX, offsetX + displayWidth - textMetrics.width - 8))
+      const labelY = Math.max(offsetY + 20, finalBoxY)
+      
+      ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
+      
+      // 标签文字
+      ctx.fillStyle = 'white'
+      ctx.fillText(label, labelX + 4, labelY - 6)
     })
-    
-    // 使用修正后的坐标
-    const finalBoxX = clampedBoxX
-    const finalBoxY = clampedBoxY
-    const finalBoxWidth = clampedBoxWidth
-    const finalBoxHeight = clampedBoxHeight
-    
-    // 设置样式
-    ctx.strokeStyle = `hsl(${index * 60}, 70%, 50%)`
-    ctx.lineWidth = 3
-    ctx.fillStyle = `hsla(${index * 60}, 70%, 50%, 0.1)`
-    
-    // 绘制矩形
-    ctx.fillRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
-    ctx.strokeRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
-    
-    // 绘制标签
-    const label = `${person.id || (index + 1)}: ${person.activity || '未知'}`
-    ctx.fillStyle = `hsl(${index * 60}, 70%, 50%)`
-    ctx.font = '14px Arial'
-    
-    // 标签背景
-    const textMetrics = ctx.measureText(label)
-    const labelX = Math.max(offsetX, Math.min(finalBoxX, offsetX + displayWidth - textMetrics.width - 8))
-    const labelY = Math.max(offsetY + 20, finalBoxY)
-    
-    ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
-    
-    // 标签文字
-    ctx.fillStyle = 'white'
-    ctx.fillText(label, labelX + 4, labelY - 6)
-  })
+  }
+  
+  // 绘制每个车辆的bbox
+  if (currentInference.value.vehicles) {
+    currentInference.value.vehicles.forEach((vehicle: any, index: number) => {
+      if (!vehicle.bbox) return
+      
+      const [x1, y1, x2, y2] = vehicle.bbox
+      
+      // 验证bbox坐标有效性
+      if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1 || x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1) {
+        console.warn(`⚠️ 车辆${index + 1} bbox坐标超出范围:`, vehicle.bbox)
+      }
+      
+      // 将归一化坐标转换为视频实际显示区域的坐标
+      const boxX = offsetX + x1 * displayWidth
+      const boxY = offsetY + y1 * displayHeight
+      const boxWidth = (x2 - x1) * displayWidth
+      const boxHeight = (y2 - y1) * displayHeight
+      
+      // 边界检查（确保在视频显示区域内）
+      const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
+      const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
+      const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
+      const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
+      
+      console.log(`🚗 车辆${index + 1} bbox详情:`, {
+        originalBbox: vehicle.bbox,
+        type: vehicle.type,
+        status: vehicle.status,
+        normalizedCoords: { x1: x1.toFixed(3), y1: y1.toFixed(3), x2: x2.toFixed(3), y2: y2.toFixed(3) },
+        calculatedCoords: { 
+          boxX: Math.round(boxX), 
+          boxY: Math.round(boxY), 
+          boxWidth: Math.round(boxWidth), 
+          boxHeight: Math.round(boxHeight) 
+        },
+        clampedCoords: {
+          boxX: Math.round(clampedBoxX),
+          boxY: Math.round(clampedBoxY),
+          boxWidth: Math.round(clampedBoxWidth),
+          boxHeight: Math.round(clampedBoxHeight)
+        },
+        withinVideoArea: {
+          x: boxX >= offsetX && (boxX + boxWidth) <= (offsetX + displayWidth),
+          y: boxY >= offsetY && (boxY + boxHeight) <= (offsetY + displayHeight)
+        },
+        adjustmentNeeded: {
+          x: boxX !== clampedBoxX || boxWidth !== clampedBoxWidth,
+          y: boxY !== clampedBoxY || boxHeight !== clampedBoxHeight
+        }
+      })
+      
+      // 使用修正后的坐标
+      const finalBoxX = clampedBoxX
+      const finalBoxY = clampedBoxY
+      const finalBoxWidth = clampedBoxWidth
+      const finalBoxHeight = clampedBoxHeight
+      
+      // 设置车辆样式（绿色）
+      ctx.strokeStyle = '#2ed573'
+      ctx.lineWidth = 3
+      ctx.fillStyle = 'rgba(46, 213, 115, 0.1)'
+      
+      // 绘制矩形
+      ctx.fillRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
+      ctx.strokeRect(finalBoxX, finalBoxY, finalBoxWidth, finalBoxHeight)
+      
+      // 绘制标签
+      const label = `${vehicle.type || '车辆'}${vehicle.id || (index + 1)}: ${vehicle.status || '未知'}`
+      ctx.fillStyle = '#2ed573'
+      ctx.font = '14px Arial'
+      
+      // 标签背景
+      const textMetrics = ctx.measureText(label)
+      const labelX = Math.max(offsetX, Math.min(finalBoxX, offsetX + displayWidth - textMetrics.width - 8))
+      const labelY = Math.max(offsetY + 20, finalBoxY)
+      
+      ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
+      
+      // 标签文字
+      ctx.fillStyle = 'white'
+      ctx.fillText(label, labelX + 4, labelY - 6)
+    })
+  }
 }
 
 // 监听推理结果变化，重新绘制bbox
@@ -1307,6 +1414,13 @@ function onVideoLoadStart() {
   border-radius: 6px;
 }
 
+.vehicles-list {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f0f9ff;
+  border-radius: 6px;
+}
+
 .person-item {
   margin-bottom: 12px;
   padding: 8px;
@@ -1315,18 +1429,29 @@ function onVideoLoadStart() {
   border: 1px solid #e6e6e6;
 }
 
-.person-item:last-child {
+.vehicle-item {
+  margin-bottom: 12px;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #e6e6e6;
+}
+
+.person-item:last-child,
+.vehicle-item:last-child {
   margin-bottom: 0;
 }
 
-.person-header {
+.person-header,
+.vehicle-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 4px;
 }
 
-.person-id {
+.person-id,
+.vehicle-id {
   font-weight: 600;
   color: #303133;
   font-size: 13px;
@@ -1341,7 +1466,17 @@ function onVideoLoadStart() {
   border: 1px solid #b3d8ff;
 }
 
-.person-bbox {
+.vehicle-status {
+  font-size: 12px;
+  color: #2ed573;
+  background: #f0fff4;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid #95de64;
+}
+
+.person-bbox,
+.vehicle-bbox {
   margin-top: 6px;
   padding: 6px 8px;
   background: #f5f7fa;

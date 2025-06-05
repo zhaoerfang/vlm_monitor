@@ -13,6 +13,7 @@ export const useMonitorStore = defineStore('monitor', {
     isStreaming: false,
     currentFrame: null,
     latestInference: null,
+    latestPlayableInference: null,
     inferenceHistory: [],
     stats: {
       fps: 0,
@@ -23,27 +24,35 @@ export const useMonitorStore = defineStore('monitor', {
   }),
 
   getters: {
+    // 获取用于播放的推理结果（优先使用有AI分析的）
+    playableInference(state): InferenceLogItem | null {
+      return state.latestPlayableInference || state.latestInference
+    },
+
     // 获取最新推理结果的解析数据
     latestParsedResult(state): InferenceResult | null {
-      if (!state.latestInference) return null
+      const inference = this.playableInference
+      if (!inference) return null
       
       // 新格式的推理结果直接包含结构化数据
-      if (state.latestInference.sampled_frames) {
+      if (inference.sampled_frames) {
         return {
-          timestamp: state.latestInference.timestamp || '',
-          people_count: state.latestInference.sampled_frames?.length || 0,
+          timestamp: inference.timestamp || '',
+          people_count: inference.sampled_frames?.length || 0,
+          vehicle_count: 0, // 新格式暂时没有车辆信息
           people: [],
-          summary: `视频包含 ${state.latestInference.total_frames} 帧，采样了 ${state.latestInference.sampled_frames?.length || 0} 帧`,
-          video_path: state.latestInference.video_path,
-          creation_time: state.latestInference.creation_time
+          vehicles: [],
+          summary: `视频包含 ${inference.total_frames} 帧，采样了 ${inference.sampled_frames?.length || 0} 帧`,
+          video_path: inference.video_path,
+          creation_time: inference.creation_time
         } as InferenceResult
       }
       
       // 兼容旧格式
-      if (!state.latestInference.result) return null
+      if (!inference.result) return null
       
       try {
-        let resultText = state.latestInference.result
+        let resultText = inference.result
         
         // 提取JSON部分
         if (resultText.includes('```json')) {
@@ -117,6 +126,15 @@ export const useMonitorStore = defineStore('monitor', {
       this.latestInference = inference
       this.inferenceHistory.push(inference)
       this.stats.inferenceCount++
+      
+      // 如果推理结果有AI分析（has_inference_result为true），则更新可播放推理结果
+      const hasAIResult = (inference as any).has_inference_result
+      if (hasAIResult) {
+        this.latestPlayableInference = inference
+        console.log('🎬 更新可播放推理结果:', (inference as any).video_id)
+      } else {
+        console.log('📋 更新推理状态（等待AI分析）:', (inference as any).video_id)
+      }
       
       // 只保留最近100个结果
       if (this.inferenceHistory.length > 100) {

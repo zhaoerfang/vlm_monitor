@@ -600,34 +600,179 @@ class AsyncVideoProcessor:
         try:
             video_path = self._create_temp_video_path()
             
+            # 确保目录存在
+            video_dir = os.path.dirname(video_path)
+            os.makedirs(video_dir, exist_ok=True)
+            
             # 获取第一帧的尺寸
             first_frame = frames_data[0]['frame']
             height, width = first_frame.shape[:2]
             
             # 创建视频写入器，使用目标帧率
             output_fps = self.frames_per_second  # 输出视频的帧率等于每秒抽取的帧数
-            fourcc = cv2.VideoWriter.fourcc(*'avc1')  # 使用H.264编码，更好的浏览器兼容性
-            writer = cv2.VideoWriter(video_path, fourcc, output_fps, (width, height))
+            
+            # 尝试多种编码器，按优先级排序
+            codecs_to_try = [
+                ('mp4v', 'MP4V'),  # 最兼容的编码器
+                ('XVID', 'XVID'),  # 广泛支持的编码器
+                ('avc1', 'H.264'), # H.264编码器
+                ('H264', 'H.264'), # 另一种H.264编码器
+                ('MJPG', 'MJPG'),  # Motion JPEG
+            ]
+            
+            writer = None
+            used_codec = None
+            temp_video_path = video_path  # 临时视频路径
+            
+            for codec_name, codec_desc in codecs_to_try:
+                try:
+                    fourcc = cv2.VideoWriter.fourcc(*codec_name)
+                    writer = cv2.VideoWriter(temp_video_path, fourcc, output_fps, (width, height))
+                    
+                    # 测试写入器是否正常工作
+                    if writer.isOpened():
+                        used_codec = codec_desc
+                        logger.debug(f"成功使用编码器: {codec_desc} ({codec_name})")
+                        break
+                    else:
+                        writer.release()
+                        writer = None
+                        logger.debug(f"编码器 {codec_desc} ({codec_name}) 不可用")
+                except Exception as e:
+                    logger.debug(f"编码器 {codec_desc} ({codec_name}) 初始化失败: {str(e)}")
+                    if writer:
+                        writer.release()
+                        writer = None
+            
+            if writer is None or not writer.isOpened():
+                logger.error("所有视频编码器都不可用")
+                return None
             
             # 写入所有帧
+            frames_written = 0
             for frame_data in frames_data:
-                writer.write(frame_data['frame'])
-                
+                try:
+                    writer.write(frame_data['frame'])
+                    frames_written += 1
+                except Exception as e:
+                    logger.warning(f"写入帧失败: {str(e)}")
+                    
             writer.release()
             
-            # 检查文件大小
-            file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            if frames_written == 0:
+                logger.error("没有成功写入任何帧")
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+                return None
+            
+            # 检查文件是否存在且有内容
+            if not os.path.exists(temp_video_path):
+                logger.error(f"视频文件创建失败，文件不存在: {temp_video_path}")
+                return None
+            
+            file_size_mb = os.path.getsize(temp_video_path) / (1024 * 1024)
+            
+            if file_size_mb == 0:
+                logger.error("视频文件大小为0，删除文件")
+                os.remove(temp_video_path)
+                return None
+            
             if file_size_mb > 95:  # 如果超过95MB，删除文件
-                os.remove(video_path)
+                os.remove(temp_video_path)
                 logger.warning(f"视频文件过大 ({file_size_mb:.2f}MB)，已删除")
                 return None
-                
-            logger.debug(f"视频文件创建成功: {video_path} ({file_size_mb:.2f}MB, {output_fps}fps)")
-            return video_path
+            
+            # 如果使用的不是H.264编码器，尝试用FFmpeg转换为H.264
+            final_video_path = temp_video_path
+            if used_codec != 'H.264' and self._is_ffmpeg_available():
+                h264_video_path = temp_video_path.replace('.mp4', '_h264.mp4')
+                if self._convert_to_h264_with_ffmpeg(temp_video_path, h264_video_path):
+                    # 转换成功，使用H.264版本
+                    final_video_path = h264_video_path
+                    used_codec = 'H.264 (FFmpeg)'
+                    
+                    # 删除原始文件
+                    try:
+                        os.remove(temp_video_path)
+                    except:
+                        pass
+                    
+                    # 更新文件大小
+                    file_size_mb = os.path.getsize(final_video_path) / (1024 * 1024)
+                    logger.debug(f"FFmpeg转换成功，新文件大小: {file_size_mb:.2f}MB")
+                else:
+                    logger.debug("FFmpeg转换失败，使用原始文件")
+                    
+            logger.debug(f"视频文件创建成功: {final_video_path}")
+            logger.debug(f"  - 编码器: {used_codec}")
+            logger.debug(f"  - 文件大小: {file_size_mb:.2f}MB")
+            logger.debug(f"  - 帧率: {output_fps}fps")
+            logger.debug(f"  - 写入帧数: {frames_written}/{len(frames_data)}")
+            
+            return final_video_path
             
         except Exception as e:
             logger.error(f"创建视频文件失败: {str(e)}")
+            # 清理可能创建的文件
+            for path_var in ['temp_video_path', 'final_video_path', 'h264_video_path']:
+                if path_var in locals():
+                    path = locals()[path_var]
+                    if os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except:
+                            pass
             return None
+
+    def _is_ffmpeg_available(self) -> bool:
+        """检查FFmpeg是否可用"""
+        try:
+            import subprocess
+            result = subprocess.run(['ffmpeg', '-version'], 
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except:
+            return False
+
+    def _convert_to_h264_with_ffmpeg(self, input_path: str, output_path: str) -> bool:
+        """使用FFmpeg将视频转换为H.264格式"""
+        try:
+            import subprocess
+            
+            # FFmpeg命令：转换为H.264，保持原始帧率和分辨率
+            cmd = [
+                'ffmpeg',
+                '-i', input_path,           # 输入文件
+                '-c:v', 'libx264',          # 使用H.264编码器
+                '-preset', 'fast',          # 快速编码预设
+                '-crf', '23',               # 质量设置（18-28，越小质量越好）
+                '-movflags', '+faststart',  # 优化网络播放
+                '-y',                       # 覆盖输出文件
+                output_path                 # 输出文件
+            ]
+            
+            logger.debug(f"执行FFmpeg转换: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0 and os.path.exists(output_path):
+                output_size = os.path.getsize(output_path)
+                if output_size > 0:
+                    logger.debug(f"FFmpeg转换成功: {output_path} ({output_size} bytes)")
+                    return True
+                else:
+                    logger.warning("FFmpeg转换后文件大小为0")
+                    return False
+            else:
+                logger.warning(f"FFmpeg转换失败: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.warning("FFmpeg转换超时")
+            return False
+        except Exception as e:
+            logger.warning(f"FFmpeg转换异常: {str(e)}")
+            return False
 
     def _save_and_sort_experiment_log(self):
         """保存并自动排序实验日志"""

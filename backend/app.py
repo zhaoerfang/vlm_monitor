@@ -28,8 +28,8 @@ from pydantic import BaseModel
 # 添加项目根目录到Python路径
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.monitor.tcp.tcp_client import TCPVideoClient
-from src.monitor.core.config import load_config
+from monitor.tcp.tcp_client import TCPVideoClient
+from monitor.core.config import load_config
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -177,7 +177,9 @@ class AppState:
                             "raw_result": inference_data.get("raw_result"),
                             "parsed_result": inference_data.get("parsed_result"),
                             "people_count": inference_data.get("parsed_result", {}).get("people_count", 0),
+                            "vehicle_count": inference_data.get("parsed_result", {}).get("vehicle_count", 0),
                             "people": inference_data.get("parsed_result", {}).get("people", []),
+                            "vehicles": inference_data.get("parsed_result", {}).get("vehicles", []),
                             "summary": inference_data.get("parsed_result", {}).get("summary", "")
                         })
                         

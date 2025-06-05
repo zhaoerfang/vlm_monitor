@@ -37,15 +37,29 @@
             
             <!-- Bbox覆盖层 -->
             <div class="bbox-overlay" ref="bboxOverlay">
+              <!-- 人员边界框 -->
               <div
                 v-for="(person, index) in currentPeople"
                 :key="`person-${index}`"
-                class="bbox"
+                class="bbox person-bbox"
                 :style="getBboxStyle(person.bbox)"
               >
-                <div class="bbox-label">
-                  <span class="person-id">{{ person.id }}</span>
+                <div class="bbox-label person-label">
+                  <span class="object-id">人{{ person.id }}</span>
                   <span class="activity">{{ person.activity }}</span>
+                </div>
+              </div>
+              
+              <!-- 车辆边界框 -->
+              <div
+                v-for="(vehicle, index) in currentVehicles"
+                :key="`vehicle-${index}`"
+                class="bbox vehicle-bbox"
+                :style="getBboxStyle(vehicle.bbox)"
+              >
+                <div class="bbox-label vehicle-label">
+                  <span class="object-id">{{ vehicle.type }}{{ vehicle.id }}</span>
+                  <span class="activity">{{ vehicle.status }}</span>
                 </div>
               </div>
             </div>
@@ -96,6 +110,11 @@
           </div>
           
           <div class="detail-group">
+            <label>车辆统计:</label>
+            <span>{{ parsedResult?.vehicle_count || 0 }}辆</span>
+          </div>
+          
+          <div class="detail-group">
             <label>场景描述:</label>
             <span>{{ parsedResult?.summary || '无描述' }}</span>
           </div>
@@ -115,7 +134,27 @@
                 <span class="person-activity">{{ person.activity }}</span>
               </div>
               <div class="person-bbox">
-                位置: [{{ person.bbox.map(v => Math.round(v * 100) / 100).join(', ') }}]
+                位置: [{{ person.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
+              </div>
+            </div>
+          </div>
+          
+          <!-- 车辆列表 -->
+          <div v-if="parsedResult?.vehicles?.length" class="vehicles-list">
+            <h5>车辆详情</h5>
+            <div
+              v-for="(vehicle, index) in parsedResult.vehicles"
+              :key="`info-vehicle-${index}`"
+              class="vehicle-item"
+              @mouseenter="highlightVehicle(index)"
+              @mouseleave="unhighlightVehicle()"
+            >
+              <div class="vehicle-header">
+                <span class="vehicle-id">{{ vehicle.type }} {{ vehicle.id }}</span>
+                <span class="vehicle-status">{{ vehicle.status }}</span>
+              </div>
+              <div class="vehicle-bbox">
+                位置: [{{ vehicle.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
               </div>
             </div>
           </div>
@@ -151,7 +190,7 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { VideoCamera, VideoPlay, Pause, Refresh } from '@element-plus/icons-vue'
 import { useMonitorStore } from '@/stores/monitor'
-import type { InferenceLogItem, InferenceResult, Person } from '@/types'
+import type { InferenceLogItem, InferenceResult, Person, Vehicle } from '@/types'
 
 const store = useMonitorStore()
 
@@ -165,6 +204,9 @@ const highlightedPersonIndex = ref(-1)
 const latestInference = computed(() => store.latestInference)
 const recentInferences = computed(() => store.recentInferences)
 const stats = computed(() => store.stats)
+
+// 监听可播放推理结果的变化
+const playableInference = computed(() => store.playableInference)
 
 const parsedResult = computed((): InferenceResult | null => {
   if (!currentInference.value?.result) return null
@@ -191,6 +233,10 @@ const currentPeople = computed((): Person[] => {
   return parsedResult.value?.people || []
 })
 
+const currentVehicles = computed((): Vehicle[] => {
+  return parsedResult.value?.vehicles || []
+})
+
 const videoUrl = computed(() => {
   if (!currentInference.value) return ''
   const videoPath = currentInference.value.video_path
@@ -198,8 +244,10 @@ const videoUrl = computed(() => {
   return `/api/videos/${fileName}`
 })
 
-watch(latestInference, (newInference) => {
-  if (newInference && (!currentInference.value || newInference.result_received_at > currentInference.value.result_received_at)) {
+watch(playableInference, (newInference) => {
+  if (newInference && (!currentInference.value || 
+      (newInference as any).video_id !== (currentInference.value as any).video_id)) {
+    console.log('🎬 切换到新的可播放推理结果:', (newInference as any).video_id)
     selectInference(newInference)
   }
 }, { immediate: true })
@@ -263,10 +311,12 @@ function seekVideo(time: number) {
 }
 
 function getBboxStyle(bbox: [number, number, number, number]) {
-  const [x, y, width, height] = bbox
+  const [x1, y1, x2, y2] = bbox
+  const width = x2 - x1
+  const height = y2 - y1
   return {
-    left: `${x * 100}%`,
-    top: `${y * 100}%`,
+    left: `${x1 * 100}%`,
+    top: `${y1 * 100}%`,
     width: `${width * 100}%`,
     height: `${height * 100}%`,
     opacity: highlightedPersonIndex.value === -1 ? 1 : 0.3
@@ -279,6 +329,14 @@ function highlightPerson(index: number) {
 
 function unhighlightPerson() {
   highlightedPersonIndex.value = -1
+}
+
+function highlightVehicle(index: number) {
+  // Implementation needed
+}
+
+function unhighlightVehicle() {
+  // Implementation needed
 }
 
 function formatTime(timestamp: number): string {
@@ -396,16 +454,33 @@ function getInferencePeopleCount(inference: InferenceLogItem): number {
   transition: opacity 0.3s;
 }
 
+.person-bbox {
+  border-color: #ff4757;
+  background: rgba(255, 71, 87, 0.1);
+}
+
+.vehicle-bbox {
+  border-color: #2ed573;
+  background: rgba(46, 213, 115, 0.1);
+}
+
 .bbox-label {
   position: absolute;
   top: -30px;
   left: 0;
-  background: #ff4757;
   color: white;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.person-label {
+  background: #ff4757;
+}
+
+.vehicle-label {
+  background: #2ed573;
 }
 
 .video-controls {
@@ -490,6 +565,49 @@ function getInferencePeopleCount(inference: InferenceLogItem): number {
 }
 
 .person-bbox {
+  font-size: 12px;
+  color: #909399;
+}
+
+.vehicles-list {
+  margin-top: 16px;
+}
+
+.vehicles-list h5 {
+  margin: 0 0 8px 0;
+  color: #303133;
+}
+
+.vehicle-item {
+  background: white;
+  border: 1px solid #e6e6e6;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.vehicle-item:hover {
+  border-color: #409eff;
+}
+
+.vehicle-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.vehicle-id {
+  font-weight: bold;
+  color: #ff4757;
+}
+
+.vehicle-status {
+  color: #606266;
+}
+
+.vehicle-bbox {
   font-size: 12px;
   color: #909399;
 }

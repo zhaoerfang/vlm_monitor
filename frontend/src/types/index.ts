@@ -8,14 +8,23 @@ export interface BoundingBox {
 
 export interface Person {
   id: number
-  bbox: [number, number, number, number] // [x, y, width, height] 相对坐标 0-1
+  bbox: [number, number, number, number] // [x1, y1, x2, y2] 相对坐标 0-1，左上角和右下角坐标
   activity: string
+}
+
+export interface Vehicle {
+  id: number
+  bbox: [number, number, number, number] // [x1, y1, x2, y2] 相对坐标 0-1，左上角和右下角坐标
+  type: string // 车辆类型：小轿车、SUV、卡车、公交车、摩托车、自行车等
+  status: string // 状态：行驶、停车、转弯等
 }
 
 export interface InferenceResult {
   timestamp: string
   people_count: number
+  vehicle_count: number
   people: Person[]
+  vehicles: Vehicle[]
   summary: string
 }
 
@@ -23,8 +32,8 @@ export interface InferenceResult {
 export interface VideoInfo {
   video_path: string
   frame_count: number
-  start_timestamp: number
-  end_timestamp: number
+  start_timestamp: string
+  end_timestamp: string
   start_relative_timestamp: number
   end_relative_timestamp: number
   duration: number
@@ -91,6 +100,7 @@ export interface AppState {
   isStreaming: boolean
   currentFrame: VideoFrame | null
   latestInference: InferenceLogItem | null
+  latestPlayableInference: InferenceLogItem | null // 最新的可播放推理结果（有AI分析的）
   inferenceHistory: InferenceLogItem[]
   stats: {
     fps: number
