@@ -962,6 +962,40 @@ function drawBboxOverlay() {
     }
   })
   
+  // 坐标转换函数：将模型的绝对坐标转换为显示坐标
+  function convertModelCoordsToDisplay(modelX: number, modelY: number): [number, number] {
+    // 获取图像尺寸信息
+    const imageDimensions = currentInference.value.image_dimensions
+    
+    if (imageDimensions && imageDimensions.model_width > 0 && imageDimensions.model_height > 0) {
+      // 图像模式：有尺寸信息，进行坐标转换
+      const originalWidth = imageDimensions.original_width
+      const originalHeight = imageDimensions.original_height
+      const modelWidth = imageDimensions.model_width
+      const modelHeight = imageDimensions.model_height
+      
+      // 第一步：将模型坐标转换为原始图像坐标
+      const originalX = (modelX / modelWidth) * originalWidth
+      const originalY = (modelY / modelHeight) * originalHeight
+      
+      // 第二步：将原始图像坐标转换为显示坐标
+      const displayX = offsetX + (originalX / originalWidth) * displayWidth
+      const displayY = offsetY + (originalY / originalHeight) * displayHeight
+      
+      console.log(`🔄 坐标转换: 模型(${modelX}, ${modelY}) -> 原始(${originalX.toFixed(1)}, ${originalY.toFixed(1)}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
+      
+      return [displayX, displayY]
+    } else {
+      // 视频模式或没有尺寸信息：假设坐标已经是相对坐标(0-1)
+      const displayX = offsetX + modelX * displayWidth
+      const displayY = offsetY + modelY * displayHeight
+      
+      console.log(`🔄 相对坐标转换: (${modelX}, ${modelY}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
+      
+      return [displayX, displayY]
+    }
+  }
+  
   // 绘制每个人的bbox
   if (currentInference.value.people) {
     currentInference.value.people.forEach((person: any, index: number) => {
@@ -969,11 +1003,14 @@ function drawBboxOverlay() {
       
       const [x1, y1, x2, y2] = person.bbox
       
-      // 将归一化坐标转换为媒体实际显示区域的坐标
-      const boxX = offsetX + x1 * displayWidth
-      const boxY = offsetY + y1 * displayHeight
-      const boxWidth = (x2 - x1) * displayWidth
-      const boxHeight = (y2 - y1) * displayHeight
+      // 转换坐标
+      const [displayX1, displayY1] = convertModelCoordsToDisplay(x1, y1)
+      const [displayX2, displayY2] = convertModelCoordsToDisplay(x2, y2)
+      
+      const boxX = Math.min(displayX1, displayX2)
+      const boxY = Math.min(displayY1, displayY2)
+      const boxWidth = Math.abs(displayX2 - displayX1)
+      const boxHeight = Math.abs(displayY2 - displayY1)
       
       // 边界检查（确保在媒体显示区域内）
       const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
@@ -1015,11 +1052,14 @@ function drawBboxOverlay() {
       
       const [x1, y1, x2, y2] = vehicle.bbox
       
-      // 将归一化坐标转换为媒体实际显示区域的坐标
-      const boxX = offsetX + x1 * displayWidth
-      const boxY = offsetY + y1 * displayHeight
-      const boxWidth = (x2 - x1) * displayWidth
-      const boxHeight = (y2 - y1) * displayHeight
+      // 转换坐标
+      const [displayX1, displayY1] = convertModelCoordsToDisplay(x1, y1)
+      const [displayX2, displayY2] = convertModelCoordsToDisplay(x2, y2)
+      
+      const boxX = Math.min(displayX1, displayX2)
+      const boxY = Math.min(displayY1, displayY2)
+      const boxWidth = Math.abs(displayX2 - displayX1)
+      const boxHeight = Math.abs(displayY2 - displayY1)
       
       // 边界检查（确保在媒体显示区域内）
       const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))

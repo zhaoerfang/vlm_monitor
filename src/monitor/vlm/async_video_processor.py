@@ -18,7 +18,7 @@ from typing import Optional, Dict, List, Callable, Any
 from datetime import datetime
 import logging
 
-from .vlm_client import DashScopeVLMClient
+from .vlm_client import DashScopeVLMClient, get_image_dimensions, smart_resize
 from ..core.config import load_config
 from ..utils.image_utils import smart_resize_frame, validate_frame, get_frame_info
 
@@ -313,18 +313,22 @@ class AsyncVideoProcessor:
         
         logger.info("推理管理器停止")
 
-    def _submit_inference_task(self, video_info: Dict):
+    def _submit_inference_task(self, media_info: Dict):
         """提交异步推理任务"""
         if self.inference_event_loop and not self.inference_event_loop.is_closed() and len(self.active_inference_tasks) < self.max_concurrent_inferences:
             try:
                 task = asyncio.run_coroutine_threadsafe(
-                    self._inference_worker_async(video_info),
+                    self._inference_worker_async(media_info),
                     self.inference_event_loop
                 )
                 self.active_inference_tasks.append(task)
                 self.total_inferences_started += 1
                 
-                logger.info(f"提交异步推理任务: {os.path.basename(video_info['video_path'])}")
+                # 获取媒体路径，兼容图像和视频模式
+                media_path = media_info.get('media_path', media_info.get('video_path', media_info.get('image_path', 'unknown')))
+                media_type = media_info.get('media_type', 'video')
+                
+                logger.info(f"提交异步推理任务: {os.path.basename(media_path)} ({media_type})")
                 logger.info(f"  - 当前并发数: {len(self.active_inference_tasks)}/{self.max_concurrent_inferences}")
                 logger.info(f"  - 总启动数: {self.total_inferences_started}")
             except Exception as e:
@@ -536,6 +540,7 @@ class AsyncVideoProcessor:
                 
                 image_info.update({
                     'media_path': final_image_path,  # 统一使用media_path字段
+                    'video_path': final_image_path,  # 为了向后兼容，添加video_path字段
                     'media_type': 'image',
                     'frame_count': 1,
                     'timestamp': frame_data['timestamp'],
@@ -660,6 +665,18 @@ class AsyncVideoProcessor:
             else:
                 new_image_path = image_path
             
+            # 获取图像尺寸信息
+            original_width, original_height = get_image_dimensions(new_image_path)
+            
+            # 计算模型resize后的尺寸
+            model_height, model_width = 0, 0
+            if original_width > 0 and original_height > 0:
+                try:
+                    model_height, model_width = smart_resize(original_height, original_width)
+                    logger.debug(f"图像尺寸信息: 原始({original_width}x{original_height}) -> 模型({model_width}x{model_height})")
+                except Exception as e:
+                    logger.warning(f"计算模型resize尺寸失败: {e}")
+            
             # 保存详情JSON
             details = {
                 'image_path': new_image_path,
@@ -673,6 +690,14 @@ class AsyncVideoProcessor:
                     'width': frame_data['frame'].shape[1],
                     'height': frame_data['frame'].shape[0],
                     'channels': frame_data['frame'].shape[2] if len(frame_data['frame'].shape) > 2 else 1
+                },
+                'image_dimensions': {
+                    'original_width': original_width,
+                    'original_height': original_height,
+                    'model_width': model_width,
+                    'model_height': model_height,
+                    'scale_x': model_width / original_width if original_width > 0 else 1.0,
+                    'scale_y': model_height / original_height if original_height > 0 else 1.0
                 }
             }
             
@@ -684,7 +709,8 @@ class AsyncVideoProcessor:
             return {
                 'details_dir': details_dir, 
                 'details_file': details_file,
-                'image_path': new_image_path
+                'image_path': new_image_path,
+                'image_dimensions': details['image_dimensions']
             }
             
         except Exception as e:

@@ -1181,7 +1181,8 @@ async def get_media_history(limit: int = 50):
                                     'relative_timestamp': image_details.get('relative_timestamp'),
                                     'creation_time': image_details.get('creation_time'),
                                     'has_inference_result': inference_result_file.exists(),
-                                    'details_dir': safe_relative_path(item)
+                                    'details_dir': safe_relative_path(item),
+                                    'image_dimensions': image_details.get('image_dimensions', {})
                                 }
                                 
                                 # 如果有推理结果，添加推理信息
