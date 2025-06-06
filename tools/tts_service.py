@@ -13,7 +13,7 @@ import argparse
 import requests
 import re
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 # 配置日志
@@ -81,8 +81,8 @@ class TTSService:
                 logger.warning("未找到session目录")
                 return None
             
-            # 按名称排序，获取最新的
-            latest_session = sorted(session_dirs, key=lambda x: x.name)[-1]
+            # 按修改时间排序，获取最新的
+            latest_session = sorted(session_dirs, key=lambda x: x.stat().st_mtime)[-1]
             logger.debug(f"最新session目录: {latest_session}")
             return latest_session
             
@@ -90,45 +90,84 @@ class TTSService:
             logger.error(f"获取最新session目录失败: {e}")
             return None
     
-    def _load_experiment_log(self, session_dir: Path) -> Optional[Dict[Any, Any]]:
-        """加载experiment_log.json文件"""
+    def _get_frame_details_dirs(self, session_dir: Path) -> List[Path]:
+        """获取session目录下所有frame的details目录"""
         try:
-            log_file = session_dir / 'experiment_log.json'
-            if not log_file.exists():
-                logger.warning(f"experiment_log.json不存在: {log_file}")
+            frame_dirs = []
+            for item in session_dir.iterdir():
+                if item.is_dir() and item.name.endswith('_details'):
+                    frame_dirs.append(item)
+            
+            # 按名称排序，确保按时间顺序处理
+            frame_dirs.sort(key=lambda x: x.name)
+            return frame_dirs
+            
+        except Exception as e:
+            logger.error(f"获取frame details目录失败: {e}")
+            return []
+    
+    def _load_inference_result(self, frame_dir: Path) -> Optional[Dict[Any, Any]]:
+        """加载frame目录中的inference_result.json文件"""
+        try:
+            result_file = frame_dir / 'inference_result.json'
+            if not result_file.exists():
+                logger.debug(f"inference_result.json不存在: {result_file}")
                 return None
             
-            with open(log_file, 'r', encoding='utf-8') as f:
+            with open(result_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             return data
             
         except Exception as e:
-            logger.error(f"加载experiment_log.json失败: {e}")
+            logger.error(f"加载inference_result.json失败: {e}")
             return None
     
-    def _extract_summary_from_result(self, result_text: str) -> Optional[str]:
+    def _extract_summary_from_inference_result(self, inference_data: Dict[Any, Any]) -> Optional[str]:
         """从推理结果中提取summary字段"""
         try:
+            # 从parsed_result中直接获取summary
+            parsed_result = inference_data.get('parsed_result', {})
+            summary = parsed_result.get('summary', '')
+            
+            if summary:
+                logger.debug(f"提取到summary: {summary}")
+                return summary
+            
+            # 如果parsed_result中没有，尝试从raw_result中解析
+            raw_result = inference_data.get('raw_result', '')
+            if raw_result:
+                return self._extract_summary_from_raw_result(raw_result)
+            
+            logger.warning(f"无法从推理结果中提取summary")
+            return None
+            
+        except Exception as e:
+            logger.error(f"提取summary失败: {e}")
+            return None
+    
+    def _extract_summary_from_raw_result(self, raw_result: str) -> Optional[str]:
+        """从原始结果字符串中提取summary字段"""
+        try:
             # 推理结果通常包含在```json和```之间
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', result_text, re.DOTALL)
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', raw_result, re.DOTALL)
             if not json_match:
                 # 尝试直接解析JSON
-                json_match = re.search(r'(\{.*\})', result_text, re.DOTALL)
+                json_match = re.search(r'(\{.*\})', raw_result, re.DOTALL)
             
             if json_match:
                 json_str = json_match.group(1)
                 result_data = json.loads(json_str)
                 summary = result_data.get('summary', '')
                 if summary:
-                    logger.debug(f"提取到summary: {summary}")
+                    logger.debug(f"从raw_result提取到summary: {summary}")
                     return summary
             
-            logger.warning(f"无法从结果中提取summary: {result_text[:100]}...")
+            logger.warning(f"无法从raw_result中提取summary: {raw_result[:100]}...")
             return None
             
         except Exception as e:
-            logger.error(f"提取summary失败: {e}")
+            logger.error(f"从raw_result提取summary失败: {e}")
             return None
     
     def _send_to_tts(self, text: str) -> bool:
@@ -165,16 +204,16 @@ class TTSService:
             logger.error(f"发送TTS请求异常: {e}")
             return False
     
-    def _get_inference_result_id(self, inference_result: Dict[Any, Any]) -> str:
+    def _get_inference_result_id(self, frame_dir: Path, inference_data: Dict[Any, Any]) -> str:
         """生成推理结果的唯一ID"""
         try:
-            # 使用media_path和inference_start_time作为唯一标识
-            media_path = inference_result.get('media_path', '')
-            start_time = inference_result.get('inference_start_time', 0)
-            return f"{media_path}_{start_time}"
+            # 使用frame目录名和推理开始时间作为唯一标识
+            frame_name = frame_dir.name
+            start_time = inference_data.get('inference_start_time', 0)
+            return f"{frame_name}_{start_time}"
         except Exception as e:
             logger.error(f"生成推理结果ID失败: {e}")
-            return str(time.time())
+            return f"{frame_dir.name}_{time.time()}"
     
     def _process_new_results(self):
         """处理新的推理结果"""
@@ -184,40 +223,41 @@ class TTSService:
             if not session_dir:
                 return
             
-            # 加载experiment_log.json
-            experiment_data = self._load_experiment_log(session_dir)
-            if not experiment_data:
-                return
-            
-            # 获取推理日志
-            inference_log = experiment_data.get('inference_log', [])
-            if not inference_log:
-                logger.debug("没有推理结果")
+            # 获取所有frame details目录
+            frame_dirs = self._get_frame_details_dirs(session_dir)
+            if not frame_dirs:
+                logger.debug("没有找到frame details目录")
                 return
             
             # 处理新的推理结果
             new_results_count = 0
-            for inference_result in inference_log:
-                result_id = self._get_inference_result_id(inference_result)
+            for frame_dir in frame_dirs:
+                # 加载推理结果
+                inference_data = self._load_inference_result(frame_dir)
+                if not inference_data:
+                    continue
+                
+                result_id = self._get_inference_result_id(frame_dir, inference_data)
                 
                 # 跳过已处理的结果
                 if result_id in self.processed_results:
                     continue
                 
                 # 提取summary
-                result_text = inference_result.get('result', '')
-                summary = self._extract_summary_from_result(result_text)
+                summary = self._extract_summary_from_inference_result(inference_data)
                 
                 if summary:
                     # 发送到TTS服务
                     if self._send_to_tts(summary):
                         self.processed_results.add(result_id)
                         new_results_count += 1
+                        logger.info(f"成功处理推理结果: {frame_dir.name}")
                     else:
                         logger.warning(f"TTS发送失败，结果ID: {result_id}")
                 else:
                     # 即使没有summary也标记为已处理，避免重复处理
                     self.processed_results.add(result_id)
+                    logger.debug(f"推理结果无summary，跳过: {frame_dir.name}")
             
             if new_results_count > 0:
                 logger.info(f"处理了 {new_results_count} 个新的推理结果")

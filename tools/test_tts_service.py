@@ -57,24 +57,22 @@ def create_test_inference_result(output_dir: str = "tmp"):
     session_dir = output_path / session_name
     session_dir.mkdir(parents=True, exist_ok=True)
     
+    # 创建frame details目录
+    frame_name = f"frame_000001_{int(time.time())}_test_details"
+    frame_dir = session_dir / frame_name
+    frame_dir.mkdir(exist_ok=True)
+    
     # 创建测试推理结果
-    test_result = {
-        "processor_config": {
-            "target_video_duration": 1.0,
-            "frames_per_second": 1,
-            "original_fps": 25.0
-        },
-        "statistics": {
-            "total_frames_received": 1,
-            "total_inferences_completed": 1,
-            "start_time": time.time(),
-            "start_timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
-        },
-        "inference_log": [
-            {
-                "media_path": f"{session_dir}/test_frame.jpg",
-                "media_type": "image",
-                "result": """```json
+    current_time = time.time()
+    test_inference_result = {
+        "video_path": f"{frame_dir}/test_frame.jpg",
+        "inference_start_time": current_time,
+        "inference_end_time": current_time + 1,
+        "inference_start_timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time)),
+        "inference_end_timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time + 1)),
+        "inference_duration": 1.0,
+        "result_received_at": current_time + 1,
+        "raw_result": """```json
 {
   "timestamp": "2025-06-06T10:30:00+08:00",
   "people_count": 2,
@@ -102,27 +100,128 @@ def create_test_inference_result(output_dir: str = "tmp"):
   "summary": "街道场景，两人在路边，一辆小轿车正在行驶"
 }
 ```""",
-                "inference_start_time": time.time(),
-                "inference_end_time": time.time() + 1,
-                "inference_duration": 1.0
-            }
-        ]
+        "parsed_result": {
+            "timestamp": "2025-06-06T10:30:00+08:00",
+            "people_count": 2,
+            "vehicle_count": 1,
+            "people": [
+                {
+                    "id": 1,
+                    "bbox": [100, 100, 200, 300],
+                    "activity": "走路"
+                },
+                {
+                    "id": 2,
+                    "bbox": [300, 150, 400, 350],
+                    "activity": "站立"
+                }
+            ],
+            "vehicles": [
+                {
+                    "id": 1,
+                    "bbox": [500, 200, 600, 300],
+                    "type": "小轿车",
+                    "status": "行驶"
+                }
+            ],
+            "summary": "街道场景，两人在路边，一辆小轿车正在行驶"
+        }
     }
     
-    # 保存测试结果
-    log_file = session_dir / "experiment_log.json"
-    with open(log_file, 'w', encoding='utf-8') as f:
-        json.dump(test_result, f, ensure_ascii=False, indent=2)
+    # 保存测试结果到inference_result.json
+    result_file = frame_dir / "inference_result.json"
+    with open(result_file, 'w', encoding='utf-8') as f:
+        json.dump(test_inference_result, f, ensure_ascii=False, indent=2)
     
-    logger.info(f"✅ 创建测试推理结果: {log_file}")
-    return session_dir
+    logger.info(f"✅ 创建测试推理结果: {result_file}")
+    return frame_dir
+
+def create_multiple_test_results(output_dir: str = "tmp", count: int = 3):
+    """创建多个测试推理结果"""
+    output_path = Path(output_dir)
+    
+    # 创建测试session目录
+    session_name = f"session_test_{int(time.time())}"
+    session_dir = output_path / session_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+    
+    created_frames = []
+    
+    for i in range(count):
+        # 创建frame details目录
+        frame_name = f"frame_{i:06d}_{int(time.time() + i)}_test_details"
+        frame_dir = session_dir / frame_name
+        frame_dir.mkdir(exist_ok=True)
+        
+        # 创建不同的测试场景
+        scenarios = [
+            {
+                "summary": "室内场景，一人坐在椅子上使用电脑",
+                "people_count": 1,
+                "vehicle_count": 0
+            },
+            {
+                "summary": "街道场景，两人在路边，一辆小轿车正在行驶",
+                "people_count": 2,
+                "vehicle_count": 1
+            },
+            {
+                "summary": "停车场场景，多辆车停放，无人员活动",
+                "people_count": 0,
+                "vehicle_count": 3
+            }
+        ]
+        
+        scenario = scenarios[i % len(scenarios)]
+        current_time = time.time() + i
+        
+        test_inference_result = {
+            "video_path": f"{frame_dir}/test_frame_{i}.jpg",
+            "inference_start_time": current_time,
+            "inference_end_time": current_time + 1,
+            "inference_start_timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time)),
+            "inference_end_timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time + 1)),
+            "inference_duration": 1.0,
+            "result_received_at": current_time + 1,
+            "raw_result": f"""```json
+{{
+  "timestamp": "{time.strftime('%Y-%m-%dT%H:%M:%S+08:00', time.localtime(current_time))}",
+  "people_count": {scenario['people_count']},
+  "vehicle_count": {scenario['vehicle_count']},
+  "people": [],
+  "vehicles": [],
+  "summary": "{scenario['summary']}"
+}}
+```""",
+            "parsed_result": {
+                "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S+08:00', time.localtime(current_time)),
+                "people_count": scenario['people_count'],
+                "vehicle_count": scenario['vehicle_count'],
+                "people": [],
+                "vehicles": [],
+                "summary": scenario['summary']
+            }
+        }
+        
+        # 保存测试结果到inference_result.json
+        result_file = frame_dir / "inference_result.json"
+        with open(result_file, 'w', encoding='utf-8') as f:
+            json.dump(test_inference_result, f, ensure_ascii=False, indent=2)
+        
+        created_frames.append(frame_dir)
+        logger.info(f"✅ 创建测试推理结果 {i+1}/{count}: {result_file}")
+        
+        # 稍微延迟，确保时间戳不同
+        time.sleep(0.1)
+    
+    return session_dir, created_frames
 
 def test_tts_service_integration(config_path: str = "config.json"):
     """测试TTS服务集成功能"""
     logger.info("🧪 开始TTS服务集成测试")
     
     # 1. 创建测试推理结果
-    session_dir = create_test_inference_result()
+    session_dir, frame_dirs = create_multiple_test_results(count=2)
     
     # 2. 读取配置
     try:
@@ -143,6 +242,8 @@ def test_tts_service_integration(config_path: str = "config.json"):
         return False
     
     logger.info("✅ TTS服务集成测试完成")
+    logger.info(f"创建了测试session: {session_dir}")
+    logger.info(f"创建了 {len(frame_dirs)} 个测试frame")
     return True
 
 def main():
@@ -155,8 +256,19 @@ def main():
                        help='TTS服务主机地址')
     parser.add_argument('--port', type=int, default=8888,
                        help='TTS服务端口')
+    parser.add_argument('--create-test-data', action='store_true',
+                       help='仅创建测试数据')
+    parser.add_argument('--count', type=int, default=3,
+                       help='创建测试数据的数量')
     
     args = parser.parse_args()
+    
+    if args.create_test_data:
+        # 仅创建测试数据
+        session_dir, frame_dirs = create_multiple_test_results(count=args.count)
+        logger.info(f"🎉 创建了 {len(frame_dirs)} 个测试推理结果")
+        logger.info(f"测试session: {session_dir}")
+        return
     
     if args.endpoint_only:
         # 仅测试TTS端点
