@@ -29,9 +29,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class SimpleSystemManager:
-    def __init__(self, test_mode: bool = False, backend_client_mode: bool = False):
+    def __init__(self, test_mode: bool = False, backend_client_mode: bool = False, enable_tts: bool = False):
         self.test_mode = test_mode
         self.backend_client_mode = backend_client_mode
+        self.enable_tts = enable_tts
         self.processes = {}
         
         # 从配置文件读取TCP端口
@@ -93,6 +94,30 @@ class SimpleSystemManager:
         except Exception as e:
             logger.error(f"恢复配置文件失败: {e}")
             return False
+    
+    def _update_tts_config(self):
+        """更新TTS配置"""
+        if not self.enable_tts:
+            return True
+            
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # 启用TTS服务
+            if 'tts' not in config:
+                config['tts'] = {}
+            config['tts']['enabled'] = True
+            
+            # 保存更新的配置，确保保持原有格式
+            with open('config.json', 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2, separators=(',', ': '))
+            
+            logger.info("✅ 配置文件已更新，TTS服务已启用")
+            return True
+        except Exception as e:
+            logger.error(f"更新TTS配置失败: {e}")
+            return False
         
     def kill_port_processes(self, port: int):
         """杀死占用指定端口的进程"""
@@ -146,12 +171,20 @@ class SimpleSystemManager:
         else:
             logger.info("🚀 启动视频监控系统（传统模式）...")
         
+        if self.enable_tts:
+            logger.info("🎵 TTS服务已启用")
+        
         # 0. 更新配置文件
         if self.backend_client_mode:
             if not self._update_config_for_backend_client():
                 return False
         else:
             if not self._restore_config_for_traditional_mode():
+                return False
+        
+        # 更新TTS配置
+        if self.enable_tts:
+            if not self._update_tts_config():
                 return False
         
         # 1. 清理端口
@@ -199,7 +232,16 @@ class SimpleSystemManager:
             ):
                 return False
         
-        # 4. 启动前端服务
+        # 4. 启动TTS服务（如果启用）
+        if self.enable_tts:
+            if not self.start_service(
+                "TTS_service",
+                [sys.executable, 'tools/tts_service.py', '--config', config_path],
+                wait_time=2
+            ):
+                logger.warning("⚠️ TTS服务启动失败，但系统将继续运行")
+        
+        # 5. 启动前端服务
         if not self.start_service(
             "Frontend_service",
             ['npm', 'run', 'dev'],
@@ -218,6 +260,9 @@ class SimpleSystemManager:
             logger.info("🔄 架构模式: 后端作为唯一TCP客户端，推理服务通过后端获取视频流")
         else:
             logger.info("🔄 架构模式: 传统模式，后端和推理服务分别连接TCP")
+        
+        if self.enable_tts:
+            logger.info("🎵 TTS服务: 监控推理结果并发送语音合成请求")
         
         return True
     
@@ -263,10 +308,16 @@ def main():
     parser.add_argument('--stop', '-s', action='store_true', help='仅清理端口')
     parser.add_argument('--backend-client', '-b', action='store_true', 
                        help='后端视频客户端模式（解决TCP连接冲突）')
+    parser.add_argument('--tts', action='store_true', 
+                       help='启用TTS服务（语音合成）')
     
     args = parser.parse_args()
     
-    manager = SimpleSystemManager(test_mode=args.test, backend_client_mode=args.backend_client)
+    manager = SimpleSystemManager(
+        test_mode=args.test, 
+        backend_client_mode=args.backend_client,
+        enable_tts=args.tts
+    )
     signal_handler.manager = manager
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)

@@ -53,6 +53,16 @@
     },
     "comment": "VLM推理相关配置，包含API密钥、模型、并发数等"
   },
+  "tts": {
+    "enabled": false,
+    "host": "localhost",
+    "port": 8888,
+    "endpoint": "/speak",
+    "check_interval": 5.0,
+    "max_retries": 3,
+    "timeout": 10,
+    "comment": "TTS服务配置，enabled控制是否启用TTS服务，check_interval为检查新推理结果的间隔（秒）"
+  },
   "monitoring": {
     "output_dir": "tmp",
     "save_frames": true,
