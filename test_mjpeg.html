@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MJPEG流测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .video-container {
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 20px 0;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 400px;
+        }
+        .video-stream {
+            max-width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background-color: #e2e3e5;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 MJPEG视频流测试</h1>
+        
+        <div class="info">
+            <h3>测试说明：</h3>
+            <ul>
+                <li>这个页面直接测试MJPEG流是否能在浏览器中正常显示</li>
+                <li>MJPEG流地址：<code>http://localhost:8080/api/video-stream</code></li>
+                <li>如果看到实时视频，说明MJPEG流工作正常</li>
+                <li>如果看不到视频，请检查后端服务器和视频流状态</li>
+            </ul>
+        </div>
+
+        <div class="controls">
+            <button onclick="startStream()">开始播放</button>
+            <button onclick="stopStream()">停止播放</button>
+            <button onclick="checkBackendStatus()">检查后端状态</button>
+            <button onclick="refreshStream()">刷新流</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div class="video-container">
+            <img id="videoStream" 
+                 class="video-stream" 
+                 style="display: none;"
+                 alt="MJPEG视频流">
+            <div id="placeholder" style="color: white; text-align: center;">
+                <h3>点击"开始播放"按钮开始测试</h3>
+                <p>等待MJPEG流加载...</p>
+            </div>
+        </div>
+
+        <div class="info">
+            <h3>调试信息：</h3>
+            <div id="debugInfo">
+                <p>页面加载时间: <span id="loadTime"></span></p>
+                <p>流状态: <span id="streamStatus">未开始</span></p>
+                <p>错误信息: <span id="errorInfo">无</span></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const videoStream = document.getElementById('videoStream');
+        const placeholder = document.getElementById('placeholder');
+        const status = document.getElementById('status');
+        const streamStatus = document.getElementById('streamStatus');
+        const errorInfo = document.getElementById('errorInfo');
+        
+        // 设置页面加载时间
+        document.getElementById('loadTime').textContent = new Date().toLocaleString();
+        
+        function showStatus(message, type = 'success') {
+            status.textContent = message;
+            status.className = `status ${type}`;
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+        
+        function updateStreamStatus(statusText) {
+            streamStatus.textContent = statusText;
+        }
+        
+        function updateErrorInfo(error) {
+            errorInfo.textContent = error || '无';
+        }
+        
+        function startStream() {
+            showStatus('正在启动MJPEG流...', 'success');
+            updateStreamStatus('启动中');
+            
+            const streamUrl = 'http://localhost:8080/api/video-stream';
+            console.log('MJPEG流URL:', streamUrl);
+            
+            // 设置图像事件处理
+            videoStream.onload = function() {
+                console.log('MJPEG流加载成功');
+                showStatus('✅ MJPEG流加载成功！视频正在播放', 'success');
+                updateStreamStatus('播放中');
+                placeholder.style.display = 'none';
+                videoStream.style.display = 'block';
+                updateErrorInfo('');
+            };
+            
+            videoStream.onerror = function(e) {
+                console.error('MJPEG流加载失败:', e);
+                showStatus('❌ MJPEG流加载失败', 'error');
+                updateStreamStatus('加载失败');
+                updateErrorInfo('图像加载错误');
+                placeholder.style.display = 'block';
+                videoStream.style.display = 'none';
+            };
+            
+            videoStream.onabort = function() {
+                console.log('MJPEG流加载被中止');
+                updateStreamStatus('已中止');
+            };
+            
+            // 设置流URL
+            videoStream.src = streamUrl + '?t=' + Date.now(); // 添加时间戳避免缓存
+        }
+        
+        function stopStream() {
+            showStatus('正在停止MJPEG流...', 'success');
+            updateStreamStatus('停止中');
+            
+            videoStream.src = '';
+            videoStream.style.display = 'none';
+            placeholder.style.display = 'block';
+            placeholder.innerHTML = '<h3>流已停止</h3><p>点击"开始播放"重新开始</p>';
+            
+            updateStreamStatus('已停止');
+            showStatus('MJPEG流已停止', 'success');
+        }
+        
+        function refreshStream() {
+            stopStream();
+            setTimeout(startStream, 1000);
+        }
+        
+        async function checkBackendStatus() {
+            showStatus('正在检查后端状态...', 'success');
+            
+            try {
+                const response = await fetch('http://localhost:8080/api/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const statusInfo = data.data;
+                    showStatus(`✅ 后端状态正常 - 流状态: ${statusInfo.streaming ? '运行中' : '已停止'}, 帧数: ${statusInfo.frame_count}`, 'success');
+                    
+                    // 更新调试信息
+                    const debugDiv = document.getElementById('debugInfo');
+                    debugDiv.innerHTML = `
+                        <p>页面加载时间: ${document.getElementById('loadTime').textContent}</p>
+                        <p>流状态: ${streamStatus.textContent}</p>
+                        <p>错误信息: ${errorInfo.textContent}</p>
+                        <p><strong>后端状态:</strong></p>
+                        <ul>
+                            <li>视频流: ${statusInfo.streaming ? '✅ 运行中' : '❌ 已停止'}</li>
+                            <li>连接客户端: ${statusInfo.connected_clients}</li>
+                            <li>帧计数: ${statusInfo.frame_count}</li>
+                            <li>临时目录: ${statusInfo.temp_dir || '无'}</li>
+                        </ul>
+                    `;
+                } else {
+                    showStatus(`❌ 后端状态异常: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`❌ 无法连接到后端服务器: ${error.message}`, 'error');
+                updateErrorInfo(`网络错误: ${error.message}`);
+            }
+        }
+        
+        // 页面加载时自动检查后端状态
+        window.onload = function() {
+            checkBackendStatus();
+        };
+    </script>
+</body>
+</html> 

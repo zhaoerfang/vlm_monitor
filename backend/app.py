@@ -19,6 +19,7 @@ from datetime import datetime
 import logging
 import queue
 import threading
+import io
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -93,24 +94,217 @@ class SystemStatus(BaseModel):
     has_experiment_log: bool
     temp_dir: Optional[str]
 
-# 内部视频流分发器
-class InternalVideoDistributor:
+# 内部视频流分发器 - 修复版本
+class ZeroLatencyVideoDistributor:
     def __init__(self):
-        self.subscribers = []  # 订阅者列表
+        # 显示管道
+        self.display_queue = queue.Queue(maxsize=5)  # 小队列，快速丢弃旧帧
+        self.display_thread = None
+        self.display_running = False
+        
+        # 推理管道
+        self.inference_queue = queue.Queue(maxsize=10)
+        self.inference_thread = None
+        self.inference_running = False
+        
+        # 状态管道
+        self.status_queue = queue.Queue(maxsize=3)
+        self.status_thread = None
+        self.status_running = False
+        
+        # 订阅者管理（保留兼容性）
+        self.subscribers = []
         self.subscribers_lock = threading.Lock()
+        
+        # 性能统计
+        self.total_frames = 0
+        self.display_frames = 0
+        self.inference_frames = 0
+        self.dropped_frames = 0
+        
+        # 最新帧缓存（用于兼容性）
         self.latest_frame = None
+        self.latest_frame_timestamp = None
         self.latest_frame_lock = threading.Lock()
         
-    def subscribe(self, callback: Callable[[np.ndarray, float], bool]) -> str:
-        """
-        订阅视频流
+        logger.info("零延迟视频分发器初始化完成")
+    
+    def start(self):
+        """启动所有处理管道"""
+        self.display_running = True
+        self.inference_running = True
+        self.status_running = True
         
-        Args:
-            callback: 帧处理回调函数 (frame, timestamp) -> bool
+        # 启动显示处理线程
+        self.display_thread = threading.Thread(target=self._display_worker, daemon=True)
+        self.display_thread.start()
+        
+        # 启动推理处理线程
+        self.inference_thread = threading.Thread(target=self._inference_worker, daemon=True)
+        self.inference_thread.start()
+        
+        # 启动状态处理线程
+        self.status_thread = threading.Thread(target=self._status_worker, daemon=True)
+        self.status_thread.start()
+        
+        logger.info("所有视频处理管道已启动")
+    
+    def stop(self):
+        """停止所有处理管道"""
+        self.display_running = False
+        self.inference_running = False
+        self.status_running = False
+        
+        # 等待线程结束
+        for thread in [self.display_thread, self.inference_thread, self.status_thread]:
+            if thread and thread.is_alive():
+                thread.join(timeout=1)
+        
+        logger.info("所有视频处理管道已停止")
+    
+    def distribute_frame_fast(self, frame: np.ndarray, timestamp: float):
+        """超快速帧分发 - 零拷贝，零阻塞"""
+        self.total_frames += 1
+        
+        # 更新最新帧缓存（用于兼容性接口）
+        with self.latest_frame_lock:
+            self.latest_frame = frame
+            self.latest_frame_timestamp = timestamp
+        
+        # 显示管道：最高优先级，立即处理
+        try:
+            # 非阻塞投递，如果队列满了就丢弃旧帧
+            if self.display_queue.full():
+                try:
+                    self.display_queue.get_nowait()  # 丢弃最旧的帧
+                    self.dropped_frames += 1
+                except queue.Empty:
+                    pass
             
-        Returns:
-            订阅ID
-        """
+            # 投递新帧（使用原始帧引用，不拷贝）
+            self.display_queue.put_nowait({
+                'frame': frame,  # 直接使用引用，不拷贝
+                'timestamp': timestamp,
+                'frame_id': self.total_frames
+            })
+        except queue.Full:
+            self.dropped_frames += 1
+        
+        # 推理管道：低优先级，跳帧处理
+        if self.total_frames % 8 == 0:  # 每8帧处理一次推理
+            try:
+                if not self.inference_queue.full():
+                    self.inference_queue.put_nowait({
+                        'frame': frame.copy(),  # 推理需要拷贝，避免并发修改
+                        'timestamp': timestamp,
+                        'frame_id': self.total_frames
+                    })
+            except queue.Full:
+                pass  # 推理队列满了就跳过
+        
+        # 状态管道：极低优先级
+        if self.total_frames % 100 == 0:  # 每100帧更新一次状态
+            try:
+                if not self.status_queue.full():
+                    self.status_queue.put_nowait({
+                        'frame_count': self.total_frames,
+                        'timestamp': timestamp,
+                        'display_frames': self.display_frames,
+                        'inference_frames': self.inference_frames,
+                        'dropped_frames': self.dropped_frames
+                    })
+            except queue.Full:
+                pass
+    
+    def _display_worker(self):
+        """显示处理工作线程 - 专门负责MJPEG编码"""
+        logger.info("显示处理线程启动")
+        
+        while self.display_running:
+            try:
+                # 获取帧数据
+                frame_data = self.display_queue.get(timeout=0.1)
+                frame = frame_data['frame']
+                
+                # 超快速JPEG编码
+                encode_params = [
+                    cv2.IMWRITE_JPEG_QUALITY, 70,      # 平衡质量和速度
+                    cv2.IMWRITE_JPEG_OPTIMIZE, 0,      # 禁用优化
+                    cv2.IMWRITE_JPEG_PROGRESSIVE, 0,   # 禁用渐进式
+                ]
+                
+                _, buffer = cv2.imencode('.jpg', frame, encode_params)
+                jpeg_data = buffer.tobytes()
+                
+                # 原子更新最新帧（这是关键！）
+                state.latest_jpeg_frame = jpeg_data
+                self.display_frames += 1
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"显示处理错误: {e}")
+        
+        logger.info("显示处理线程结束")
+    
+    def _inference_worker(self):
+        """推理处理工作线程"""
+        logger.info("推理处理线程启动")
+        
+        while self.inference_running:
+            try:
+                # 获取帧数据
+                frame_data = self.inference_queue.get(timeout=0.1)
+                frame = frame_data['frame']
+                timestamp = frame_data['timestamp']
+                
+                # 分发给推理订阅者
+                with self.subscribers_lock:
+                    for subscriber in self.subscribers[:]:
+                        if subscriber.get('active', True):
+                            try:
+                                should_continue = subscriber['callback'](frame, timestamp)
+                                if not should_continue:
+                                    subscriber['active'] = False
+                            except Exception as e:
+                                logger.error(f"推理订阅者错误: {e}")
+                                subscriber['active'] = False
+                
+                self.inference_frames += 1
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"推理处理错误: {e}")
+        
+        logger.info("推理处理线程结束")
+    
+    def _status_worker(self):
+        """状态处理工作线程"""
+        logger.info("状态处理线程启动")
+        
+        while self.status_running:
+            try:
+                # 获取状态数据
+                status_data = self.status_queue.get(timeout=1.0)
+                
+                # 广播状态更新
+                if len(state.connected_clients) > 0:
+                    asyncio.run_coroutine_threadsafe(
+                        state.broadcast_message("stream_status", status_data),
+                        asyncio.get_event_loop()
+                    )
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"状态处理错误: {e}")
+        
+        logger.info("状态处理线程结束")
+    
+    # 兼容性方法
+    def subscribe(self, callback: Callable[[np.ndarray, float], bool]) -> str:
+        """订阅推理流"""
         subscriber_id = f"subscriber_{int(time.time() * 1000)}_{len(self.subscribers)}"
         subscriber = {
             'id': subscriber_id,
@@ -121,50 +315,43 @@ class InternalVideoDistributor:
         with self.subscribers_lock:
             self.subscribers.append(subscriber)
         
-        logger.info(f"新订阅者: {subscriber_id}, 总订阅者: {len(self.subscribers)}")
+        logger.info(f"新推理订阅者: {subscriber_id}")
         return subscriber_id
     
     def unsubscribe(self, subscriber_id: str):
         """取消订阅"""
         with self.subscribers_lock:
             self.subscribers = [s for s in self.subscribers if s['id'] != subscriber_id]
-        logger.info(f"取消订阅: {subscriber_id}, 剩余订阅者: {len(self.subscribers)}")
-    
-    def distribute_frame(self, frame: np.ndarray, timestamp: float):
-        """分发帧给所有订阅者"""
-        # 更新最新帧
-        with self.latest_frame_lock:
-            self.latest_frame = (frame.copy(), timestamp)
-        
-        # 分发给所有订阅者
-        with self.subscribers_lock:
-            inactive_subscribers = []
-            for subscriber in self.subscribers:
-                if subscriber['active']:
-                    try:
-                        should_continue = subscriber['callback'](frame, timestamp)
-                        if not should_continue:
-                            subscriber['active'] = False
-                            inactive_subscribers.append(subscriber['id'])
-                    except Exception as e:
-                        logger.error(f"订阅者 {subscriber['id']} 回调失败: {e}")
-                        subscriber['active'] = False
-                        inactive_subscribers.append(subscriber['id'])
-            
-            # 移除不活跃的订阅者
-            if inactive_subscribers:
-                self.subscribers = [s for s in self.subscribers if s['id'] not in inactive_subscribers]
-                logger.info(f"移除不活跃订阅者: {inactive_subscribers}")
-    
-    def get_latest_frame(self) -> Optional[tuple]:
-        """获取最新帧"""
-        with self.latest_frame_lock:
-            return self.latest_frame
+        logger.info(f"取消订阅: {subscriber_id}")
     
     def get_subscriber_count(self) -> int:
         """获取订阅者数量"""
         with self.subscribers_lock:
-            return len([s for s in self.subscribers if s['active']])
+            return len([s for s in self.subscribers if s.get('active', True)])
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """获取性能统计"""
+        return {
+            'total_frames': self.total_frames,
+            'display_frames': self.display_frames,
+            'inference_frames': self.inference_frames,
+            'dropped_frames': self.dropped_frames,
+            'drop_rate': self.dropped_frames / max(1, self.total_frames) * 100,
+            'display_queue_size': self.display_queue.qsize(),
+            'inference_queue_size': self.inference_queue.qsize(),
+            'status_queue_size': self.status_queue.qsize()
+        }
+    
+    def get_latest_frame(self) -> Optional[tuple]:
+        """获取最新帧（兼容性方法）- 修复版本"""
+        with self.latest_frame_lock:
+            if self.latest_frame is not None:
+                return (self.latest_frame, self.latest_frame_timestamp)
+            return None
+    
+    def distribute_frame(self, frame: np.ndarray, timestamp: float):
+        """分发帧（兼容性方法）"""
+        self.distribute_frame_fast(frame, timestamp)
 
 # 全局状态管理
 class AppState:
@@ -179,15 +366,20 @@ class AppState:
         self.temp_dir: Optional[Path] = None
         self.latest_session_dir: Optional[Path] = None
         
-        # 视频帧队列
+        # 视频帧队列（保留兼容性）
         self.frame_queue = queue.Queue(maxsize=10)
         self.queue_processor_task: Optional[asyncio.Task] = None
         
-        # 内部视频流分发器
-        self.video_distributor = InternalVideoDistributor()
+        # 零延迟视频流分发器
+        self.video_distributor = ZeroLatencyVideoDistributor()
         
         # 查找最新的实验目录
         self._find_latest_session_dir()
+        
+        # HTTP流媒体相关
+        self.mjpeg_clients = []
+        self.mjpeg_clients_lock = threading.Lock()
+        self.latest_jpeg_frame: Optional[bytes] = None
     
     def _find_latest_session_dir(self):
         """查找最新的实验会话目录"""
@@ -364,22 +556,22 @@ class AppState:
                 pass
     
     async def _process_frame_queue(self):
-        """处理帧队列"""
-        logger.info("启动帧队列处理器")
+        """处理帧队列（现在主要用于状态更新）"""
+        logger.info("启动状态队列处理器")
         while True:
             try:
-                # 检查是否有帧数据
+                # 检查是否有状态数据
                 if not self.frame_queue.empty():
-                    frame_data = self.frame_queue.get_nowait()
+                    status_data = self.frame_queue.get_nowait()
                     if len(self.connected_clients) > 0:
-                        await self.broadcast_message("video_frame", frame_data)
-                        logger.debug(f"广播帧 #{frame_data.get('frame_number', 0)}")
+                        await self.broadcast_message("stream_status", status_data)
+                        logger.debug(f"广播状态更新 #{status_data.get('frame_number', 0)}")
                 
                 # 短暂休眠避免CPU占用过高
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)  # 降低频率，因为只是状态更新
                 
             except Exception as e:
-                logger.error(f"处理帧队列异常: {e}")
+                logger.error(f"处理状态队列异常: {e}")
                 await asyncio.sleep(0.1)
 
 # 创建全局状态实例
@@ -444,15 +636,16 @@ async def start_video_stream(websocket: WebSocket):
         return
     
     try:
-        # 创建TCP客户端
+        # 创建TCP客户端 - 使用优化参数
         tcp_config = state.config['stream']['tcp']
         logger.info(f"创建TCP客户端: {tcp_config['host']}:{tcp_config['port']}")
         
         state.tcp_client = TCPVideoClient(
             host=tcp_config['host'],
             port=tcp_config['port'],
-            frame_rate=25,  # 实时流不抽帧
-            timeout=tcp_config['connection_timeout']
+            frame_rate=60,  # 提高到60fps
+            timeout=tcp_config['connection_timeout'],
+            buffer_size=1000  # 增加缓冲区
         )
         
         # 启动视频流任务
@@ -530,54 +723,37 @@ async def send_latest_inference(websocket: WebSocket):
         })
 
 async def run_video_stream():
-    """运行视频流（异步版本）"""
-    logger.info("开始运行视频流")
+    """运行视频流（异步版本）- 零延迟多管道架构"""
+    logger.info("开始运行视频流 - 零延迟多管道架构")
     state.streaming = True
     state.frame_count = 0
     
+    # 启动视频分发器
+    state.video_distributor.start()
+    
     def frame_callback(frame):
+        """超简化的帧回调 - 只负责快速分发"""
         if not state.streaming:
-            logger.info("视频流已停止，退出帧回调")
             return False
         
         try:
-            logger.debug(f"收到视频帧，尺寸: {frame.shape}")
-            
             current_timestamp = time.time()
             state.frame_count += 1
             
-            # 分发帧给内部订阅者（推理服务等）
-            state.video_distributor.distribute_frame(frame, current_timestamp)
+            # 零延迟分发到各个管道
+            state.video_distributor.distribute_frame_fast(frame, current_timestamp)
             
-            # 将OpenCV帧转换为JPEG并编码为base64（用于WebSocket）
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            frame_base64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
-            
-            frame_data = {
-                'data': frame_base64,
-                'timestamp': current_timestamp,
-                'frame_number': state.frame_count
-            }
-            state.last_frame = frame_data
-            
-            # 每帧都输出日志（前10帧）
-            if state.frame_count <= 10:
-                logger.info(f"处理第 {state.frame_count} 帧，当前连接客户端: {len(state.connected_clients)}, 内部订阅者: {state.video_distributor.get_subscriber_count()}")
-            elif state.frame_count % 10 == 0:
-                logger.info(f"已处理 {state.frame_count} 帧，当前连接客户端: {len(state.connected_clients)}, 内部订阅者: {state.video_distributor.get_subscriber_count()}")
-            
-            # 检查是否有连接的客户端
-            if len(state.connected_clients) == 0:
-                logger.debug("没有连接的WebSocket客户端，跳过广播")
-            else:
-                # 将帧数据添加到队列
-                state.add_frame_to_queue(frame_data)
-                logger.debug(f"已添加第 {state.frame_count} 帧到队列")
+            # 简单的性能监控
+            if state.frame_count % 1000 == 0:
+                stats = state.video_distributor.get_stats()
+                logger.info(f"性能统计 - 总帧: {stats['total_frames']}, "
+                          f"显示: {stats['display_frames']}, 推理: {stats['inference_frames']}, "
+                          f"丢帧率: {stats['drop_rate']:.1f}%")
             
             return True
             
         except Exception as e:
-            logger.error(f"处理视频帧失败: {str(e)}", exc_info=True)
+            logger.error(f"帧分发失败: {str(e)}")
             return False
     
     try:
@@ -599,6 +775,7 @@ async def run_video_stream():
         await state.broadcast_message("error", f"视频流异常: {str(e)}")
     finally:
         state.streaming = False
+        state.video_distributor.stop()
         logger.info("视频流已停止")
 
 # REST API路由
@@ -936,15 +1113,16 @@ async def start_stream_api():
                 timestamp=time.time()
             )
         
-        # 创建TCP客户端
+        # 创建TCP客户端 - 使用优化参数
         tcp_config = state.config['stream']['tcp']
         logger.info(f"创建TCP客户端: {tcp_config['host']}:{tcp_config['port']}")
         
         state.tcp_client = TCPVideoClient(
             host=tcp_config['host'],
             port=tcp_config['port'],
-            frame_rate=25,
-            timeout=tcp_config['connection_timeout']
+            frame_rate=60,  # 提高到60fps
+            timeout=tcp_config['connection_timeout'],
+            buffer_size=1000  # 增加缓冲区
         )
         
         # 启动视频流任务
@@ -1502,6 +1680,100 @@ def register_inference_callback(callback: Callable[[np.ndarray, float], bool]) -
 def unregister_inference_callback(subscriber_id: str):
     """取消推理服务的视频帧订阅"""
     state.video_distributor.unsubscribe(subscriber_id)
+
+# 添加新的HTTP流媒体端点
+@app.get("/api/video-stream")
+async def video_stream():
+    """提供MJPEG视频流 - 极致性能版本"""
+    
+    def generate_mjpeg_stream():
+        """生成MJPEG流 - 极致性能优化版本"""
+        boundary = "frame"
+        frame_count = 0
+        last_frame_time = time.time()
+        last_fps_log = time.time()
+        
+        # 预分配空白帧，避免重复创建
+        blank_frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        _, blank_jpeg = cv2.imencode('.jpg', blank_frame, [cv2.IMWRITE_JPEG_QUALITY, 30])
+        blank_jpeg_data = blank_jpeg.tobytes()
+        
+        # 性能优化变量
+        consecutive_same_frames = 0
+        last_frame_data = None
+        
+        # 预计算固定的边界字符串
+        boundary_bytes = boundary.encode()
+        content_type_header = b'Content-Type: image/jpeg\r\n'
+        
+        while True:
+            current_time = time.time()
+            
+            # 获取最新的JPEG帧（原子操作，无锁）
+            jpeg_data = state.latest_jpeg_frame
+            if jpeg_data is None:
+                jpeg_data = blank_jpeg_data
+            
+            # 检测重复帧，避免发送相同数据
+            if jpeg_data == last_frame_data:
+                consecutive_same_frames += 1
+                # 如果连续相同帧超过2帧，稍微延迟以避免浪费带宽
+                if consecutive_same_frames > 2:
+                    time.sleep(0.005)  # 5ms延迟
+                    continue
+            else:
+                consecutive_same_frames = 0
+                last_frame_data = jpeg_data
+            
+            # 预计算帧头，减少字符串操作
+            content_length = str(len(jpeg_data)).encode()
+            frame_header = (
+                b'--' + boundary_bytes + b'\r\n' +
+                content_type_header +
+                b'Content-Length: ' + content_length + b'\r\n\r\n'
+            )
+            
+            # 一次性发送完整帧（减少系统调用）
+            yield frame_header + jpeg_data + b'\r\n'
+            
+            frame_count += 1
+            
+            # 极致性能帧率控制
+            if frame_count <= 50:
+                # 启动阶段：最高速度
+                time.sleep(0.005)  # ~200fps
+            elif frame_count <= 200:
+                # 稳定阶段：高速度
+                time.sleep(0.008)  # ~125fps
+            else:
+                # 正常运行：稳定超高速
+                time.sleep(0.010)  # ~100fps
+            
+            # 性能监控（每15秒记录一次）
+            if current_time - last_fps_log > 15.0:
+                elapsed = current_time - last_frame_time
+                if elapsed > 0:
+                    fps = (frame_count - (frame_count - 300 if frame_count > 300 else 0)) / elapsed
+                    logger.debug(f"MJPEG流性能: {fps:.1f}fps, 帧大小: {len(jpeg_data)/1024:.1f}KB, 重复帧: {consecutive_same_frames}")
+                last_fps_log = current_time
+                if frame_count > 300:
+                    last_frame_time = current_time
+                    frame_count = 300  # 重置计数器
+    
+    return StreamingResponse(
+        generate_mjpeg_stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "Transfer-Encoding": "chunked",  # 启用分块传输
+            "X-Content-Type-Options": "nosniff"  # 防止MIME类型嗅探
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn

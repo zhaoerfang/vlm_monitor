@@ -27,10 +27,10 @@
       "port": 1234,
       "fps": 25.0,
       "video_file": "data/sample_video.mp4",
-      "connection_timeout": 10,
+      "connection_timeout": 5,
       "use_backend_client": true,
       "backend_url": "http://localhost:8080",
-      "frame_rate": 5
+      "frame_rate": 25
     }
   },
   "rtsp": {

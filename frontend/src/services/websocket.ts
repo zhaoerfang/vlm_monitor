@@ -92,6 +92,7 @@ export class WebSocketService {
         this.onInferenceCallback?.(message.data as InferenceLogItem)
         break
       case 'status_update':
+      case 'stream_status':
         this.onStatusCallback?.(message.data)
         break
       case 'error':

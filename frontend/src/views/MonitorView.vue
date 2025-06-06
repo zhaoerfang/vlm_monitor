@@ -27,7 +27,7 @@
           </div>
           
           <div class="video-container">
-            <div v-if="!store.isStreaming && !currentFrame" class="placeholder">
+            <div v-if="!store.isStreaming && !streamLoaded" class="placeholder">
               <div class="placeholder-content">
                 <div class="icon">📹</div>
                 <p>实时视频流</p>
@@ -36,7 +36,7 @@
               </div>
             </div>
             
-            <div v-else-if="store.isStreaming && !currentFrame" class="placeholder">
+            <div v-else-if="store.isStreaming && !streamLoaded" class="placeholder">
               <div class="placeholder-content">
                 <div class="icon">⏳</div>
                 <p>等待视频信号...</p>
@@ -46,18 +46,23 @@
             </div>
             
             <div v-else class="video-display">
-              <canvas 
-                ref="videoCanvas"
-                :width="640"
-                :height="360"
-                @click="onCanvasClick"
-                class="video-canvas"
-              ></canvas>
+              <!-- 使用MJPEG流显示实时视频 -->
+              <img 
+                :src="mjpegStreamUrl"
+                class="video-stream"
+                @load="onStreamLoad"
+                @error="onStreamError"
+                alt="实时视频流"
+                crossorigin="anonymous"
+                decoding="async"
+                loading="eager"
+              />
               
               <div class="video-overlay">
                 <div class="frame-info">
-                  <span>帧号: {{ currentFrame.frame_number }}</span>
-                  <span>延迟: {{ formatLatency(currentFrame.timestamp) }}ms</span>
+                  <span>实时视频流</span>
+                  <span v-if="stats.totalFrames > 0">帧数: {{ stats.totalFrames }}</span>
+                  <span v-if="streamFps > 0" class="fps-counter">{{ streamFps.toFixed(1) }} FPS</span>
                 </div>
               </div>
             </div>
@@ -114,8 +119,8 @@
                       ref="inferenceImage"
                       :src="getMediaUrl(currentInference.filename || getVideoFileName(currentInference.video_path))"
                       class="inference-image"
-                      @load="onImageLoaded"
-                      @error="onImageError"
+                      @load="onStreamLoad"
+                      @error="onStreamError"
                     />
                     
                     <!-- 图像覆盖层用于显示bbox -->
@@ -336,9 +341,17 @@ import websocketService from '@/services/websocket'
 
 const store = useMonitorStore()
 const isLoading = ref(false)
-const videoCanvas = ref<HTMLCanvasElement>()
 const inferenceVideo = ref<HTMLVideoElement>()
 const bboxCanvas = ref<HTMLCanvasElement>()
+
+// MJPEG流相关状态
+const mjpegStreamUrl = ref('/api/video-stream')
+const streamLoaded = ref(false)
+const streamFps = ref(0)
+
+// FPS计算相关
+let frameLoadTimes: number[] = []
+let lastFpsUpdate = 0
 
 // 定时器引用
 let statusCheckInterval: number | null = null
@@ -355,7 +368,6 @@ const isLoadingHistory = ref(false)
 const stats = computed(() => store.stats)
 const latestInference = computed(() => store.latestInference)
 const currentInference = computed(() => store.playableInference)
-const currentFrame = computed(() => store.currentFrame)
 
 const connectionStatus = computed(() => {
   return store.isConnected ? 'success' : 'danger'
@@ -414,15 +426,12 @@ const parsedResult = computed(() => {
   }
 })
 
-// 监听当前帧变化，绘制到canvas
-watch(currentFrame, (frame) => {
-  if (frame) {
-    drawFrameToCanvas(frame)
-  }
-}, { immediate: true })
-
 onMounted(async () => {
   console.log('🎬 MonitorView 组件已挂载')
+  
+  // 初始化MJPEG流URL
+  mjpegStreamUrl.value = `/api/video-stream?t=${Date.now()}`
+  console.log('🎥 MJPEG流URL:', mjpegStreamUrl.value)
   
   // 初始化WebSocket连接
   await initializeWebSocket()
@@ -466,30 +475,56 @@ onUnmounted(() => {
   }
 })
 
-// 绘制帧到Canvas
-function drawFrameToCanvas(frame: any) {
-  if (!videoCanvas.value) return
+// MJPEG流处理函数
+function onStreamLoad() {
+  console.log('🎥 MJPEG流加载成功')
+  streamLoaded.value = true
   
-  const canvas = videoCanvas.value
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
+  // 高性能FPS计算
+  const now = performance.now()  // 使用高精度时间
+  frameLoadTimes.push(now)
   
-  try {
-    // 创建图像对象
-    const img = new Image()
-    img.onload = () => {
-      // 清除canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-      
-      // 绘制图像
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  // 保持最近60帧的时间记录（减少内存使用）
+  if (frameLoadTimes.length > 60) {
+    frameLoadTimes = frameLoadTimes.slice(-60)
+  }
+  
+  // 每200ms更新一次FPS显示（提高响应性）
+  if (now - lastFpsUpdate > 200) {
+    // 计算最近1秒内的帧数
+    const oneSecondAgo = now - 1000
+    const recentFrames = frameLoadTimes.filter(time => time > oneSecondAgo)
+    streamFps.value = recentFrames.length
+    lastFpsUpdate = now
+    
+    // 性能优化：如果FPS过低，提示用户
+    if (streamFps.value < 15 && frameLoadTimes.length > 10) {
+      console.warn(`⚠️ 视频流FPS较低: ${streamFps.value}fps，可能需要优化`)
     }
-    
-    // 设置图像源（假设是base64编码）
-    img.src = `data:image/jpeg;base64,${frame.data}`
-    
-  } catch (error) {
-    console.error('绘制帧失败:', error)
+  }
+}
+
+function onStreamError() {
+  console.error('❌ MJPEG流加载失败')
+  streamLoaded.value = false
+  streamFps.value = 0
+  
+  // 清空FPS计算数据
+  frameLoadTimes = []
+  
+  // 智能重连机制
+  setTimeout(() => {
+    if (store.isStreaming) {
+      console.log('🔄 尝试重新连接MJPEG流...')
+      // 添加随机参数避免缓存，并使用高精度时间戳
+      mjpegStreamUrl.value = `/api/video-stream?t=${performance.now()}&r=${Math.random()}`
+    }
+  }, 1000)  // 减少重连延迟
+}
+
+function onCanvasClick() {
+  if (!store.isStreaming) {
+    startStream()
   }
 }
 
@@ -564,7 +599,7 @@ async function loadInferenceHistory() {
       // 将推理历史数据转换为实验日志格式
       const experimentLog = {
         session_id: 'current',
-        start_time: response.data.length > 0 ? response.data[0].timestamp : null,
+        start_time: response.data.length > 0 ? (response.data[0] as any).timestamp || (response.data[0] as any).creation_timestamp : null,
         inference_log: response.data,
         total_inferences: response.data.length,
         status: 'running'
@@ -583,7 +618,7 @@ async function loadLatestInference() {
     // 优先获取最新的已完成AI分析的推理结果（有inference_result.json的）
     const aiResponse = await apiService.getLatestInferenceWithAI()
     if (aiResponse.success && aiResponse.data) {
-      console.log('🎬 获取到最新AI分析结果用于播放:', aiResponse.data.video_id, '时间:', aiResponse.data.creation_timestamp)
+      console.log('�� 获取到最新AI分析结果用于播放:', (aiResponse.data as any).video_id, '时间:', (aiResponse.data as any).creation_timestamp)
       store.addInferenceResult(aiResponse.data)
       return
     }
@@ -591,7 +626,7 @@ async function loadLatestInference() {
     // 如果没有AI分析结果，检查是否有任何推理结果（用于显示状态）
     const response = await apiService.getLatestInference()
     if (response.success && response.data) {
-      console.log('📋 获取到推理结果（等待AI分析）:', response.data.video_id, '时间:', response.data.creation_timestamp)
+      console.log('�� 获取到推理结果（等待AI分析）:', (response.data as any).video_id, '时间:', (response.data as any).creation_timestamp)
       // 只更新状态，但不用于播放
       store.addInferenceResult(response.data)
       
@@ -769,12 +804,6 @@ function formatTime(timestamp: number | string): string {
 function formatLatency(timestamp: number): number {
   const now = Date.now() / 1000
   return Math.round((now - timestamp) * 1000)
-}
-
-function onCanvasClick() {
-  if (!store.isStreaming) {
-    startStream()
-  }
 }
 
 function getInferenceTime(inference: any): number | string {
@@ -1247,33 +1276,6 @@ function onVideoLoadStart() {
   })
 }
 
-// 图像相关处理函数
-function onImageLoaded() {
-  const image = document.querySelector('.inference-image') as HTMLImageElement
-  if (!image) return
-  
-  console.log('🖼️ 推理图像加载完成:', {
-    naturalWidth: image.naturalWidth,
-    naturalHeight: image.naturalHeight,
-    clientWidth: image.clientWidth,
-    clientHeight: image.clientHeight,
-    src: image.src
-  })
-  
-  // 图像加载完成后绘制bbox
-  nextTick(() => {
-    drawBboxOverlay()
-  })
-}
-
-function onImageError(event: Event) {
-  const image = event.target as HTMLImageElement
-  console.error('❌ 图像加载错误:', {
-    src: image.src,
-    currentInference: currentInference.value?.filename
-  })
-}
-
 // 历史记录相关函数
 async function loadMediaHistory() {
   isLoadingHistory.value = true
@@ -1666,6 +1668,14 @@ function onThumbnailError(event: Event) {
   max-height: 100%;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.video-stream {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  object-fit: contain;
 }
 
 .video-overlay {

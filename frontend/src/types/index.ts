@@ -82,7 +82,7 @@ export interface ExperimentLog {
 
 // WebSocket消息类型 - 更新以匹配FastAPI后端
 export interface WebSocketMessage {
-  type: 'video_frame' | 'inference_result' | 'status_update' | 'error'
+  type: 'video_frame' | 'inference_result' | 'status_update' | 'stream_status' | 'error'
   data: any
   timestamp: number
 }

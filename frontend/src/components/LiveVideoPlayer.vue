@@ -2,174 +2,110 @@
   <div class="live-video-player">
     <div class="video-header">
       <h3>实时视频流</h3>
-      <div class="status-indicators">
-        <el-tag :type="connectionStatus" size="small">
-          {{ connectionText }}
-        </el-tag>
-        <el-tag v-if="stats.fps > 0" type="info" size="small">
-          {{ stats.fps }} FPS
-        </el-tag>
+      <div class="controls">
+        <el-button 
+          :type="isStreaming ? 'danger' : 'primary'"
+          :loading="isConnecting"
+          @click="toggleStream"
+        >
+          {{ isStreaming ? '停止' : '开始' }}
+        </el-button>
+        <el-button 
+          type="info" 
+          :disabled="!isConnected"
+          @click="refreshConnection"
+        >
+          刷新连接
+        </el-button>
       </div>
     </div>
     
     <div class="video-container" ref="videoContainer">
-      <canvas 
-        ref="videoCanvas"
-        :width="canvasWidth"
-        :height="canvasHeight"
-        @click="onCanvasClick"
-      ></canvas>
+      <!-- 使用img元素显示MJPEG流 - 不依赖WebSocket状态 -->
+      <img 
+        :src="mjpegStreamUrl"
+        class="video-stream"
+        @load="onStreamLoad"
+        @error="onStreamError"
+        alt="实时视频流"
+      />
       
-      <!-- 视频流控制overlay -->
-      <div v-if="!isStreaming" class="video-overlay">
-        <div class="overlay-content">
-          <el-icon size="48"><VideoPlay /></el-icon>
-          <p>点击开始播放实时视频流</p>
-          <el-button 
-            type="primary" 
-            size="large"
-            :loading="isConnecting"
-            @click="startStream"
-          >
-            {{ isConnecting ? '连接中...' : '开始播放' }}
-          </el-button>
-        </div>
-      </div>
-      
-      <!-- 无信号overlay -->
-      <div v-else-if="!currentFrame" class="video-overlay no-signal">
-        <div class="overlay-content">
-          <el-icon size="48"><Warning /></el-icon>
-          <p>等待视频信号...</p>
-          <el-button size="small" @click="stopStream">停止</el-button>
-        </div>
+      <!-- 错误占位符 -->
+      <div v-if="showPlaceholder" class="video-placeholder">
+        <el-icon size="64"><VideoCamera /></el-icon>
+        <p>{{ placeholderText }}</p>
       </div>
     </div>
     
-    <!-- 控制面板 -->
-    <div class="control-panel">
-      <div class="control-group">
-        <el-button 
-          v-if="!isStreaming"
-          type="primary" 
-          :loading="isConnecting"
-          @click="startStream"
-        >
-          开始播放
-        </el-button>
-        <el-button 
-          v-else
-          type="danger" 
-          @click="stopStream"
-        >
-          停止播放
-        </el-button>
-        
-        <el-button @click="toggleFullscreen">
-          <el-icon><FullScreen /></el-icon>
-          全屏
-        </el-button>
+    <div class="video-info">
+      <div class="status-item">
+        <span class="label">WebSocket:</span>
+        <el-tag :type="isConnected ? 'success' : 'danger'">
+          {{ isConnected ? '已连接' : '未连接' }}
+        </el-tag>
       </div>
-      
-      <div class="stats-group">
-        <span>总帧数: {{ stats.totalFrames }}</span>
-        <span v-if="currentFrame">
-          帧号: {{ currentFrame.frame_number }}
-        </span>
-        <span v-if="currentFrame">
-          延迟: {{ formatLatency(currentFrame.timestamp) }}ms
-        </span>
+      <div class="status-item">
+        <span class="label">视频流:</span>
+        <el-tag :type="isStreaming ? 'success' : 'info'">
+          {{ isStreaming ? '播放中' : '已停止' }}
+        </el-tag>
+      </div>
+      <div class="status-item">
+        <span class="label">MJPEG流:</span>
+        <el-tag :type="streamLoaded ? 'success' : 'warning'">
+          {{ streamLoaded ? '已加载' : '加载中' }}
+        </el-tag>
+      </div>
+      <div class="status-item" v-if="stats.totalFrames > 0">
+        <span class="label">总帧数:</span>
+        <span>{{ stats.totalFrames }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
-import { VideoPlay, Warning, FullScreen } from '@element-plus/icons-vue'
+// @ts-ignore
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ElMessage, ElButton, ElTag, ElIcon } from 'element-plus'
+import { VideoCamera } from '@element-plus/icons-vue'
 import { useMonitorStore } from '@/stores/monitor'
-import websocketService from '@/services/websocket'
-import type { VideoFrame } from '@/types'
+import { websocketService } from '@/services/websocket'
 
-// Store
 const store = useMonitorStore()
 
 // 响应式状态
-const videoContainer = ref<HTMLDivElement>()
-const videoCanvas = ref<HTMLCanvasElement>()
 const isConnecting = ref(false)
-const canvasWidth = ref(640)
-const canvasHeight = ref(360)
+const mjpegStreamUrl = ref('/api/video-stream')
+const showPlaceholder = ref(false)
+const placeholderText = ref('正在加载视频流...')
+const streamLoaded = ref(false)
 
 // 计算属性
+const isConnected = computed(() => store.isConnected)
 const isStreaming = computed(() => store.isStreaming)
-const currentFrame = computed(() => store.currentFrame)
 const stats = computed(() => store.stats)
 
-const connectionStatus = computed(() => {
-  return store.isConnected ? 'success' : 'danger'
-})
-
-const connectionText = computed(() => {
-  return store.isConnected ? '已连接' : '未连接'
-})
-
-// Canvas上下文
-let canvasContext: CanvasRenderingContext2D | null = null
-
-// 初始化
+// 生命周期
 onMounted(async () => {
-  initializeCanvas()
   setupWebSocket()
   await connectWebSocket()
+  
+  // 添加时间戳避免缓存问题
+  mjpegStreamUrl.value = `/api/video-stream?t=${Date.now()}`
+  console.log('组件已挂载，MJPEG流URL:', mjpegStreamUrl.value)
 })
 
 onUnmounted(() => {
   websocketService.disconnect()
 })
 
-// 监听当前帧变化，绘制到canvas
-watch(currentFrame, (frame) => {
-  if (frame) {
-    drawFrameToCanvas(frame)
-  }
-}, { immediate: true })
-
-// 初始化Canvas
-function initializeCanvas() {
-  nextTick(() => {
-    if (videoCanvas.value) {
-      canvasContext = videoCanvas.value.getContext('2d')
-      resizeCanvas()
-    }
-  })
-}
-
-// 调整Canvas尺寸
-function resizeCanvas() {
-  if (videoContainer.value) {
-    const containerRect = videoContainer.value.getBoundingClientRect()
-    const aspectRatio = 16 / 9 // 假设视频比例为16:9
-    
-    let width = Math.min(containerRect.width - 20, 800)
-    let height = width / aspectRatio
-    
-    if (height > containerRect.height - 100) {
-      height = containerRect.height - 100
-      width = height * aspectRatio
-    }
-    
-    canvasWidth.value = width
-    canvasHeight.value = height
-  }
-}
-
 // 设置WebSocket回调
 function setupWebSocket() {
   websocketService.onConnected(() => {
     store.setConnectionStatus(true)
     ElMessage.success('WebSocket连接成功')
+    console.log('WebSocket已连接，MJPEG流URL:', mjpegStreamUrl.value)
   })
   
   websocketService.onDisconnected(() => {
@@ -178,8 +114,15 @@ function setupWebSocket() {
     ElMessage.warning('WebSocket连接断开')
   })
   
-  websocketService.onFrame((frame: VideoFrame) => {
-    store.updateCurrentFrame(frame)
+  websocketService.onStatus((data: any) => {
+    console.log('收到状态更新:', data)
+    if (data.streaming !== undefined) {
+      store.setStreamingStatus(data.streaming)
+      console.log('更新流状态:', data.streaming)
+    }
+    if (data.frame_number) {
+      store.stats.totalFrames = data.frame_number
+    }
   })
   
   websocketService.onError((error: string) => {
@@ -203,95 +146,62 @@ async function connectWebSocket() {
   }
 }
 
-// 开始视频流
-function startStream() {
-  if (!store.isConnected) {
+// 切换视频流
+async function toggleStream() {
+  if (!isConnected.value) {
     ElMessage.warning('请先连接WebSocket')
-    connectWebSocket()
     return
   }
   
-  websocketService.startVideoStream()
-  store.setStreamingStatus(true)
-  ElMessage.success('开始播放视频流')
-}
-
-// 停止视频流
-function stopStream() {
-  websocketService.stopVideoStream()
-  store.setStreamingStatus(false)
-  ElMessage.info('停止播放视频流')
-}
-
-// 绘制帧到Canvas
-function drawFrameToCanvas(frame: VideoFrame) {
-  if (!canvasContext || !videoCanvas.value) return
-  
   try {
-    // 创建图像对象
-    const img = new Image()
-    img.onload = () => {
-      // 清除canvas
-      canvasContext!.clearRect(0, 0, canvasWidth.value, canvasHeight.value)
-      
-      // 绘制图像
-      canvasContext!.drawImage(
-        img, 
-        0, 0, 
-        canvasWidth.value, 
-        canvasHeight.value
-      )
-    }
-    
-    // 设置图像源（假设是base64编码）
-    img.src = `data:image/jpeg;base64,${frame.data}`
-    
-  } catch (error) {
-    console.error('绘制帧失败:', error)
-  }
-}
-
-// Canvas点击事件
-function onCanvasClick() {
-  if (!isStreaming.value) {
-    startStream()
-  }
-}
-
-// 切换全屏
-function toggleFullscreen() {
-  if (videoContainer.value) {
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
+    if (isStreaming.value) {
+      websocketService.stopVideoStream()
+      ElMessage.info('正在停止视频流...')
     } else {
-      videoContainer.value.requestFullscreen()
+      websocketService.startVideoStream()
+      ElMessage.info('正在启动视频流...')
     }
+  } catch (error) {
+    console.error('切换视频流失败:', error)
+    ElMessage.error('操作失败')
   }
 }
 
-// 格式化延迟
-function formatLatency(timestamp: number): number {
-  const now = Date.now() / 1000
-  return Math.round((now - timestamp) * 1000)
+// 刷新连接
+async function refreshConnection() {
+  await connectWebSocket()
 }
 
-// 监听窗口大小变化
-window.addEventListener('resize', resizeCanvas)
+// MJPEG流事件
+function onStreamLoad() {
+  console.log('MJPEG流加载成功')
+  streamLoaded.value = true
+  showPlaceholder.value = false
+  ElMessage.success('视频流加载成功')
+}
+
+function onStreamError() {
+  console.error('MJPEG流加载失败')
+  streamLoaded.value = false
+  showPlaceholder.value = true
+  placeholderText.value = '视频流加载失败，请检查后端服务器状态'
+  ElMessage.error('视频流加载失败')
+}
 </script>
 
 <style scoped>
 .live-video-player {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
 }
 
 .video-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #e6e6e6;
+  margin-bottom: 20px;
 }
 
 .video-header h3 {
@@ -299,86 +209,57 @@ window.addEventListener('resize', resizeCanvas)
   color: #303133;
 }
 
-.status-indicators {
+.controls {
   display: flex;
-  gap: 8px;
+  gap: 10px;
 }
 
 .video-container {
-  flex: 1;
   position: relative;
+  width: 100%;
+  height: 400px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  overflow: hidden;
   display: flex;
-  justify-content: center;
   align-items: center;
-  background: #000;
-  min-height: 300px;
+  justify-content: center;
 }
 
-.video-container canvas {
+.video-stream {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-.video-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  color: white;
-}
-
-.video-overlay.no-signal {
-  background: rgba(0, 0, 0, 0.8);
-}
-
-.overlay-content {
+.video-placeholder {
   text-align: center;
+  color: #909399;
 }
 
-.overlay-content p {
-  margin: 16px 0;
-  font-size: 16px;
+.video-placeholder p {
+  margin-top: 16px;
+  font-size: 14px;
 }
 
-.control-panel {
+.video-info {
   display: flex;
-  justify-content: space-between;
+  gap: 20px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+}
+
+.status-item {
+  display: flex;
   align-items: center;
-  padding: 16px;
-  border-top: 1px solid #e6e6e6;
-  background: #fafafa;
-}
-
-.control-group {
-  display: flex;
   gap: 8px;
 }
 
-.stats-group {
-  display: flex;
-  gap: 16px;
+.status-item .label {
   font-size: 14px;
-  color: #666;
-}
-
-.stats-group span {
-  padding: 4px 8px;
-  background: #f0f0f0;
-  border-radius: 4px;
-}
-
-/* 全屏样式 */
-.video-container:fullscreen {
-  background: #000;
-}
-
-.video-container:fullscreen canvas {
-  max-width: 100vw;
-  max-height: 100vh;
+  color: #606266;
+  font-weight: 500;
 }
 </style> 
