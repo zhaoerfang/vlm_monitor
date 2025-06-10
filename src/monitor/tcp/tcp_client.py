@@ -74,7 +74,7 @@ class TCPVideoClient:
             self.socket.connect((self.host, self.port))
             
             # 连接后设置为非阻塞模式以提高性能
-            self.socket.settimeout(0.1)  # 100ms超时，更快响应
+            self.socket.settimeout(0.05)  # 50ms超时，更快响应
             
             self.connected = True
             logger.info(f"✅ 已连接到TCP服务器: {self.host}:{self.port} (优化模式)")
@@ -143,14 +143,8 @@ class TCPVideoClient:
                 
                 self.frames_received += 1
                 
-                # 移除复杂的跳帧逻辑，只保留最基本的帧率控制
-                time_since_last = current_time - self.last_frame_time
+                # 完全移除跳帧逻辑，处理所有接收到的帧
                 should_process = True
-                
-                # 只在帧率过高时进行最小限制
-                if time_since_last < self.min_frame_interval:
-                    # 只有在极端情况下才跳帧（>200fps）
-                    should_process = (self.frames_received % 2 == 0)
                 
                 if should_process:
                     # 调用回调处理帧

@@ -51,12 +51,12 @@ def detect_tcp_fps(host: str, port: int, config: Dict[str, Any], sample_duration
         
         while time.time() - start_time < sample_duration:
             try:
-                # 接收帧大小（4字节）
-                size_data = _receive_exact(sock, 4)
+                # 接收帧大小（8字节，小端序）- 修复协议匹配
+                size_data = _receive_exact(sock, 8)
                 if not size_data:
                     break
                 
-                frame_size = struct.unpack('!I', size_data)[0]
+                frame_size = struct.unpack('<Q', size_data)[0]
                 
                 # 验证帧大小合理性
                 if frame_size > 50 * 1024 * 1024:  # 50MB限制
@@ -72,11 +72,15 @@ def detect_tcp_fps(host: str, port: int, config: Dict[str, Any], sample_duration
                 frame_timestamps.append(time.time())
                 frame_count += 1
                 
-                # 反序列化验证（可选，这里只是为了确保数据完整性）
+                # JPEG数据验证（检查是否是有效的JPEG数据）
                 try:
-                    pickle.loads(frame_data)
+                    if frame_data.startswith(b'\xff\xd8') and frame_data.endswith(b'\xff\xd9'):
+                        # 有效的JPEG数据
+                        pass
+                    else:
+                        logger.warning("接收到的数据不是有效的JPEG格式，但继续计数")
                 except:
-                    logger.warning("帧数据反序列化失败，但继续计数")
+                    logger.warning("JPEG数据验证失败，但继续计数")
                 
             except socket.timeout:
                 logger.warning("接收帧超时")

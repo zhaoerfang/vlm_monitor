@@ -37,7 +37,7 @@ class SimpleSystemManager:
         
         # 从配置文件读取TCP端口
         self.tcp_port = self._load_tcp_port()
-        self.ports = [self.tcp_port, 8080, 5173]  # TCP视频、后端、前端端口
+        self.ports = [8080, 5173]  # 后端、前端端口
         
     def _load_tcp_port(self) -> int:
         """从配置文件加载TCP端口"""

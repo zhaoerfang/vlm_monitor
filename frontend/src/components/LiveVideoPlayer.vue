@@ -21,12 +21,13 @@
     </div>
     
     <div class="video-container" ref="videoContainer">
-      <!-- 使用img元素显示MJPEG流 - 不依赖WebSocket状态 -->
-      <img 
-        :src="mjpegStreamUrl"
+      <!-- 使用Canvas显示WebSocket传来的实时视频流 -->
+      <canvas 
+        ref="videoCanvas"
         class="video-stream"
-        @load="onStreamLoad"
-        @error="onStreamError"
+        width="640"
+        height="360"
+        v-show="streamLoaded"
         alt="实时视频流"
       />
       
@@ -76,10 +77,10 @@ const store = useMonitorStore()
 
 // 响应式状态
 const isConnecting = ref(false)
-const mjpegStreamUrl = ref('/api/video-stream')
 const showPlaceholder = ref(false)
 const placeholderText = ref('正在加载视频流...')
 const streamLoaded = ref(false)
+const videoCanvas = ref<HTMLCanvasElement>()
 
 // 计算属性
 const isConnected = computed(() => store.isConnected)
@@ -91,9 +92,7 @@ onMounted(async () => {
   setupWebSocket()
   await connectWebSocket()
   
-  // 添加时间戳避免缓存问题
-  mjpegStreamUrl.value = `/api/video-stream?t=${Date.now()}`
-  console.log('组件已挂载，MJPEG流URL:', mjpegStreamUrl.value)
+  console.log('LiveVideoPlayer组件已挂载')
 })
 
 onUnmounted(() => {
@@ -105,13 +104,22 @@ function setupWebSocket() {
   websocketService.onConnected(() => {
     store.setConnectionStatus(true)
     ElMessage.success('WebSocket连接成功')
-    console.log('WebSocket已连接，MJPEG流URL:', mjpegStreamUrl.value)
+    console.log('WebSocket已连接')
   })
   
   websocketService.onDisconnected(() => {
     store.setConnectionStatus(false)
     store.setStreamingStatus(false)
     ElMessage.warning('WebSocket连接断开')
+  })
+  
+  websocketService.onFrame((frameData: any) => {
+    console.log('收到视频帧:', frameData.frame_number)
+    if (frameData.frame_number) {
+      store.stats.totalFrames = frameData.frame_number
+    }
+    // 处理视频帧显示
+    onVideoFrameReceived(frameData)
   })
   
   websocketService.onStatus((data: any) => {
@@ -127,6 +135,7 @@ function setupWebSocket() {
   
   websocketService.onError((error: string) => {
     ElMessage.error(`连接错误: ${error}`)
+    onStreamError()
   })
 }
 
@@ -172,12 +181,63 @@ async function refreshConnection() {
   await connectWebSocket()
 }
 
-// MJPEG流事件
-function onStreamLoad() {
-  console.log('MJPEG流加载成功')
-  streamLoaded.value = true
-  showPlaceholder.value = false
-  ElMessage.success('视频流加载成功')
+// 视频帧处理
+function onVideoFrameReceived(frameData: any) {
+  console.log('🎥 LiveVideoPlayer收到视频帧')
+  
+  if (!videoCanvas.value) return
+  
+  const canvas = videoCanvas.value
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  
+  try {
+    // 创建图像对象
+    const img = new Image()
+    img.onload = () => {
+      // 计算适合canvas的尺寸，保持纵横比
+      const canvasWidth = canvas.width
+      const canvasHeight = canvas.height
+      const imgAspect = img.width / img.height
+      const canvasAspect = canvasWidth / canvasHeight
+      
+      let drawWidth, drawHeight, drawX, drawY
+      
+      if (imgAspect > canvasAspect) {
+        // 图像更宽，以宽度为准
+        drawWidth = canvasWidth
+        drawHeight = canvasWidth / imgAspect
+        drawX = 0
+        drawY = (canvasHeight - drawHeight) / 2
+      } else {
+        // 图像更高，以高度为准
+        drawHeight = canvasHeight
+        drawWidth = canvasHeight * imgAspect
+        drawX = (canvasWidth - drawWidth) / 2
+        drawY = 0
+      }
+      
+      // 清空canvas并绘制新帧
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+      ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight)
+      
+      // 更新状态
+      streamLoaded.value = true
+      showPlaceholder.value = false
+    }
+    
+    img.onerror = () => {
+      console.error('视频帧图像加载失败')
+      onStreamError()
+    }
+    
+    // 设置base64图像数据
+    img.src = `data:image/jpeg;base64,${frameData.data}`
+    
+  } catch (error) {
+    console.error('❌ 绘制视频帧失败:', error)
+    onStreamError()
+  }
 }
 
 function onStreamError() {

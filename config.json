@@ -23,12 +23,13 @@
       }
     },
     "tcp": {
-      "host": "172.20.10.4",
+      "host": "localhost",
       "port": 1234,
       "fps": 25.0,
-      "video_file": "data/sample_video.mp4",
+      "auto_detect_fps": false,
+      "video_file": "/home/fze/code/vlm_monitor/data/(3).mp4",
       "connection_timeout": 5,
-      "use_backend_client": true,
+      "use_backend_client": false,
       "backend_url": "http://localhost:8080",
       "frame_rate": 25
     }

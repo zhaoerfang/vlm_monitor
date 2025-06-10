@@ -46,17 +46,14 @@
             </div>
             
             <div v-else class="video-display">
-              <!-- 使用MJPEG流显示实时视频 -->
-              <img 
-                :src="mjpegStreamUrl"
+              <!-- 使用Canvas显示WebSocket传来的实时视频帧 -->
+              <canvas 
+                ref="liveVideoCanvas"
                 class="video-stream"
-                @load="onStreamLoad"
-                @error="onStreamError"
-                alt="实时视频流"
-                crossorigin="anonymous"
-                decoding="async"
-                loading="eager"
-              />
+                width="640"
+                height="360"
+                @click="onCanvasClick"
+              ></canvas>
               
               <div class="video-overlay">
                 <div class="frame-info">
@@ -343,9 +340,9 @@ const store = useMonitorStore()
 const isLoading = ref(false)
 const inferenceVideo = ref<HTMLVideoElement>()
 const bboxCanvas = ref<HTMLCanvasElement>()
+const liveVideoCanvas = ref<HTMLCanvasElement>()
 
-// MJPEG流相关状态
-const mjpegStreamUrl = ref('/api/video-stream')
+// 实时视频流相关状态
 const streamLoaded = ref(false)
 const streamFps = ref(0)
 
@@ -429,10 +426,6 @@ const parsedResult = computed(() => {
 onMounted(async () => {
   console.log('🎬 MonitorView 组件已挂载')
   
-  // 初始化MJPEG流URL
-  mjpegStreamUrl.value = `/api/video-stream?t=${Date.now()}`
-  console.log('🎥 MJPEG流URL:', mjpegStreamUrl.value)
-  
   // 初始化WebSocket连接
   await initializeWebSocket()
   
@@ -475,9 +468,9 @@ onUnmounted(() => {
   }
 })
 
-// MJPEG流处理函数
-function onStreamLoad() {
-  console.log('🎥 MJPEG流加载成功')
+// WebSocket视频帧处理函数
+function onVideoFrameReceived(frameData: any) {
+  console.log('🎥 收到视频帧')
   streamLoaded.value = true
   
   // 高性能FPS计算
@@ -497,29 +490,69 @@ function onStreamLoad() {
     streamFps.value = recentFrames.length
     lastFpsUpdate = now
     
-    // 性能优化：如果FPS过低，提示用户
-    if (streamFps.value < 15 && frameLoadTimes.length > 10) {
+    // 性能优化：如果FPS过低，提示用户（调整阈值以适应低帧率摄像头）
+    if (streamFps.value < 2 && frameLoadTimes.length > 10) {
       console.warn(`⚠️ 视频流FPS较低: ${streamFps.value}fps，可能需要优化`)
     }
+  }
+  
+  // 在canvas上绘制视频帧
+  drawVideoFrame(frameData)
+}
+
+function drawVideoFrame(frameData: any) {
+  if (!liveVideoCanvas.value) return
+  
+  const canvas = liveVideoCanvas.value
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  
+  try {
+    // 创建图像对象
+    const img = new Image()
+    img.onload = () => {
+      // 计算适合canvas的尺寸，保持纵横比
+      const canvasWidth = canvas.width
+      const canvasHeight = canvas.height
+      const imgAspect = img.width / img.height
+      const canvasAspect = canvasWidth / canvasHeight
+      
+      let drawWidth, drawHeight, drawX, drawY
+      
+      if (imgAspect > canvasAspect) {
+        // 图像更宽，以宽度为准
+        drawWidth = canvasWidth
+        drawHeight = canvasWidth / imgAspect
+        drawX = 0
+        drawY = (canvasHeight - drawHeight) / 2
+      } else {
+        // 图像更高，以高度为准
+        drawHeight = canvasHeight
+        drawWidth = canvasHeight * imgAspect
+        drawX = (canvasWidth - drawWidth) / 2
+        drawY = 0
+      }
+      
+      // 清空canvas并绘制新帧
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+      ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight)
+    }
+    
+    // 设置base64图像数据
+    img.src = `data:image/jpeg;base64,${frameData.data}`
+    
+  } catch (error) {
+    console.error('❌ 绘制视频帧失败:', error)
   }
 }
 
 function onStreamError() {
-  console.error('❌ MJPEG流加载失败')
+  console.error('❌ 视频流错误')
   streamLoaded.value = false
   streamFps.value = 0
   
   // 清空FPS计算数据
   frameLoadTimes = []
-  
-  // 智能重连机制
-  setTimeout(() => {
-    if (store.isStreaming) {
-      console.log('🔄 尝试重新连接MJPEG流...')
-      // 添加随机参数避免缓存，并使用高精度时间戳
-      mjpegStreamUrl.value = `/api/video-stream?t=${performance.now()}&r=${Math.random()}`
-    }
-  }, 1000)  // 减少重连延迟
 }
 
 function onCanvasClick() {
@@ -545,6 +578,8 @@ async function initializeWebSocket() {
   websocketService.onFrame((frame) => {
     console.log('📹 收到视频帧:', frame.frame_number)
     store.updateCurrentFrame(frame)
+    // 处理实时视频显示
+    onVideoFrameReceived(frame)
   })
   
   websocketService.onInference((inference) => {
@@ -618,7 +653,7 @@ async function loadLatestInference() {
     // 优先获取最新的已完成AI分析的推理结果（有inference_result.json的）
     const aiResponse = await apiService.getLatestInferenceWithAI()
     if (aiResponse.success && aiResponse.data) {
-      console.log('�� 获取到最新AI分析结果用于播放:', (aiResponse.data as any).video_id, '时间:', (aiResponse.data as any).creation_timestamp)
+      console.log('✅ 获取到最新AI分析结果用于播放:', (aiResponse.data as any).video_id, '时间:', (aiResponse.data as any).creation_timestamp)
       store.addInferenceResult(aiResponse.data)
       return
     }
@@ -626,7 +661,7 @@ async function loadLatestInference() {
     // 如果没有AI分析结果，检查是否有任何推理结果（用于显示状态）
     const response = await apiService.getLatestInference()
     if (response.success && response.data) {
-      console.log('�� 获取到推理结果（等待AI分析）:', (response.data as any).video_id, '时间:', (response.data as any).creation_timestamp)
+      console.log('✅ 获取到推理结果（等待AI分析）:', (response.data as any).video_id, '时间:', (response.data as any).creation_timestamp)
       // 只更新状态，但不用于播放
       store.addInferenceResult(response.data)
       
@@ -910,7 +945,7 @@ function drawBboxOverlay() {
   } else {
     // 视频模式
     mediaElement = inferenceVideo.value
-    if (!mediaElement || mediaElement.readyState < 1) {
+    if (!mediaElement || (mediaElement as HTMLVideoElement).readyState < 1) {
       console.log('⏳ 视频元数据未加载完成，等待中...')
       return
     }
@@ -925,52 +960,29 @@ function drawBboxOverlay() {
     return
   }
   
-  // 计算媒体在容器中的实际显示尺寸和位置（考虑object-fit: contain）
-  const mediaAspectRatio = mediaWidth / mediaHeight
-  const containerAspectRatio = containerWidth / containerHeight
-  
-  let displayWidth, displayHeight, offsetX, offsetY
-  
-  if (mediaAspectRatio > containerAspectRatio) {
-    // 媒体更宽，以容器宽度为准，高度按比例缩放
-    displayWidth = containerWidth
-    displayHeight = containerWidth / mediaAspectRatio
-    offsetX = 0
-    offsetY = (containerHeight - displayHeight) / 2
-  } else {
-    // 媒体更高或比例相同，以容器高度为准，宽度按比例缩放
-    displayWidth = containerHeight * mediaAspectRatio
-    displayHeight = containerHeight
-    offsetX = (containerWidth - displayWidth) / 2
-    offsetY = 0
-  }
-  
   console.log(`📐 ${isCurrentInferenceImage.value ? '图像' : '视频'}显示计算详情:`, {
     mediaOriginal: { 
       width: mediaWidth, 
-      height: mediaHeight, 
-      aspectRatio: mediaAspectRatio.toFixed(3) 
+      height: mediaHeight
     },
     container: { 
       width: containerWidth, 
-      height: containerHeight, 
-      aspectRatio: containerAspectRatio.toFixed(3) 
-    },
-    actualDisplay: { 
-      width: Math.round(displayWidth), 
-      height: Math.round(displayHeight), 
-      offsetX: Math.round(offsetX), 
-      offsetY: Math.round(offsetY) 
+      height: containerHeight
     }
   })
   
-  // 设置canvas尺寸与容器一致
+  // 设置canvas尺寸与容器一致（现在容器就是媒体的实际显示尺寸）
   canvas.width = containerWidth
   canvas.height = containerHeight
   
   // 设置canvas样式尺寸
   canvas.style.width = `${containerWidth}px`
   canvas.style.height = `${containerHeight}px`
+  
+  // 设置canvas的绝对定位，覆盖整个媒体元素
+  canvas.style.position = 'absolute'
+  canvas.style.top = '0px'
+  canvas.style.left = '0px'
   
   // 清除之前的绘制
   ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -983,45 +995,55 @@ function drawBboxOverlay() {
     peopleCount: currentInference.value.people?.length || 0,
     vehicleCount: currentInference.value.vehicles?.length || 0,
     totalObjects: totalObjects,
-    displayArea: { 
-      width: Math.round(displayWidth), 
-      height: Math.round(displayHeight), 
-      offsetX: Math.round(offsetX), 
-      offsetY: Math.round(offsetY) 
+    canvasSize: { 
+      width: containerWidth, 
+      height: containerHeight
     }
   })
   
-  // 坐标转换函数：将模型的绝对坐标转换为显示坐标
+  // 坐标转换函数：将模型坐标转换为显示坐标
   function convertModelCoordsToDisplay(modelX: number, modelY: number): [number, number] {
     // 获取图像尺寸信息
     const imageDimensions = currentInference.value.image_dimensions
     
     if (imageDimensions && imageDimensions.model_width > 0 && imageDimensions.model_height > 0) {
       // 图像模式：有尺寸信息，进行坐标转换
-      const originalWidth = imageDimensions.original_width
-      const originalHeight = imageDimensions.original_height
       const modelWidth = imageDimensions.model_width
       const modelHeight = imageDimensions.model_height
       
-      // 第一步：将模型坐标转换为原始图像坐标
-      const originalX = (modelX / modelWidth) * originalWidth
-      const originalY = (modelY / modelHeight) * originalHeight
+      // 将模型坐标转换为相对坐标(0-1)
+      const relativeX = modelX / modelWidth
+      const relativeY = modelY / modelHeight
       
-      // 第二步：将原始图像坐标转换为显示坐标
-      const displayX = offsetX + (originalX / originalWidth) * displayWidth
-      const displayY = offsetY + (originalY / originalHeight) * displayHeight
+      // 将相对坐标转换为显示坐标（直接映射到容器尺寸）
+      const displayX = relativeX * containerWidth
+      const displayY = relativeY * containerHeight
       
-      console.log(`🔄 坐标转换: 模型(${modelX}, ${modelY}) -> 原始(${originalX.toFixed(1)}, ${originalY.toFixed(1)}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
+      console.log(`🔄 坐标转换: 模型(${modelX}, ${modelY}) -> 相对(${relativeX.toFixed(3)}, ${relativeY.toFixed(3)}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
+      console.log(`📐 尺寸信息: 模型${modelWidth}x${modelHeight}, 容器${containerWidth}x${containerHeight}`)
       
       return [displayX, displayY]
     } else {
       // 视频模式或没有尺寸信息：假设坐标已经是相对坐标(0-1)
-      const displayX = offsetX + modelX * displayWidth
-      const displayY = offsetY + modelY * displayHeight
-      
-      console.log(`🔄 相对坐标转换: (${modelX}, ${modelY}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
-      
-      return [displayX, displayY]
+      if (modelX >= 0 && modelX <= 1 && modelY >= 0 && modelY <= 1) {
+        const displayX = modelX * containerWidth
+        const displayY = modelY * containerHeight
+        
+        console.log(`🔄 相对坐标转换: (${modelX}, ${modelY}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
+        
+        return [displayX, displayY]
+      } else {
+        // 绝对坐标，根据媒体原始尺寸进行转换
+        const relativeX = modelX / mediaWidth
+        const relativeY = modelY / mediaHeight
+        const displayX = relativeX * containerWidth
+        const displayY = relativeY * containerHeight
+        
+        console.log(`🔄 绝对坐标转换: (${modelX}, ${modelY}) -> 相对(${relativeX.toFixed(3)}, ${relativeY.toFixed(3)}) -> 显示(${displayX.toFixed(1)}, ${displayY.toFixed(1)})`)
+        console.log(`📐 媒体尺寸: ${mediaWidth}x${mediaHeight}, 容器尺寸: ${containerWidth}x${containerHeight}`)
+        
+        return [displayX, displayY]
+      }
     }
   }
   
@@ -1042,35 +1064,48 @@ function drawBboxOverlay() {
       const boxHeight = Math.abs(displayY2 - displayY1)
       
       // 边界检查（确保在媒体显示区域内）
-      const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
-      const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
-      const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
-      const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
+      const clampedBoxX = Math.max(0, Math.min(boxX, containerWidth - 1))
+      const clampedBoxY = Math.max(0, Math.min(boxY, containerHeight - 1))
+      const clampedBoxWidth = Math.max(1, Math.min(boxWidth, containerWidth - clampedBoxX))
+      const clampedBoxHeight = Math.max(1, Math.min(boxHeight, containerHeight - clampedBoxY))
       
-      // 设置人员样式（红色）
-      ctx.strokeStyle = '#ff4757'
-      ctx.lineWidth = 3
-      ctx.fillStyle = 'rgba(255, 71, 87, 0.1)'
+      console.log(`👤 人员${index + 1} bbox绘制:`, {
+        原始坐标: [x1, y1, x2, y2],
+        显示坐标: [displayX1.toFixed(1), displayY1.toFixed(1), displayX2.toFixed(1), displayY2.toFixed(1)],
+        计算框: { x: boxX.toFixed(1), y: boxY.toFixed(1), w: boxWidth.toFixed(1), h: boxHeight.toFixed(1) },
+        限制框: { x: clampedBoxX.toFixed(1), y: clampedBoxY.toFixed(1), w: clampedBoxWidth.toFixed(1), h: clampedBoxHeight.toFixed(1) },
+        显示区域: { w: containerWidth.toFixed(1), h: containerHeight.toFixed(1) }
+      })
       
-      // 绘制矩形
-      ctx.fillRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
-      ctx.strokeRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
-      
-      // 绘制标签
-      const label = `人${person.id || (index + 1)}: ${person.activity || '未知'}`
-      ctx.fillStyle = '#ff4757'
-      ctx.font = '14px Arial'
-      
-      // 标签背景
-      const textMetrics = ctx.measureText(label)
-      const labelX = Math.max(offsetX, Math.min(clampedBoxX, offsetX + displayWidth - textMetrics.width - 8))
-      const labelY = Math.max(offsetY + 20, clampedBoxY)
-      
-      ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
-      
-      // 标签文字
-      ctx.fillStyle = 'white'
-      ctx.fillText(label, labelX + 4, labelY - 6)
+      // 只有当bbox有有效尺寸时才绘制
+      if (clampedBoxWidth > 2 && clampedBoxHeight > 2) {
+        // 设置人员样式（红色）
+        ctx.strokeStyle = '#ff4757'
+        ctx.lineWidth = 3
+        ctx.fillStyle = 'rgba(255, 71, 87, 0.1)'
+        
+        // 绘制矩形
+        ctx.fillRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
+        ctx.strokeRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
+        
+        // 绘制标签
+        const label = `人${person.id || (index + 1)}: ${person.activity || '未知'}`
+        ctx.fillStyle = '#ff4757'
+        ctx.font = '14px Arial'
+        
+        // 标签背景
+        const textMetrics = ctx.measureText(label)
+        const labelX = Math.max(0, Math.min(clampedBoxX, containerWidth - textMetrics.width - 8))
+        const labelY = Math.max(20, clampedBoxY)
+        
+        ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
+        
+        // 标签文字
+        ctx.fillStyle = 'white'
+        ctx.fillText(label, labelX + 4, labelY - 6)
+      } else {
+        console.warn(`⚠️ 人员${index + 1} bbox尺寸过小，跳过绘制`)
+      }
     })
   }
   
@@ -1091,35 +1126,48 @@ function drawBboxOverlay() {
       const boxHeight = Math.abs(displayY2 - displayY1)
       
       // 边界检查（确保在媒体显示区域内）
-      const clampedBoxX = Math.max(offsetX, Math.min(boxX, offsetX + displayWidth - 1))
-      const clampedBoxY = Math.max(offsetY, Math.min(boxY, offsetY + displayHeight - 1))
-      const clampedBoxWidth = Math.max(1, Math.min(boxWidth, offsetX + displayWidth - clampedBoxX))
-      const clampedBoxHeight = Math.max(1, Math.min(boxHeight, offsetY + displayHeight - clampedBoxY))
+      const clampedBoxX = Math.max(0, Math.min(boxX, containerWidth - 1))
+      const clampedBoxY = Math.max(0, Math.min(boxY, containerHeight - 1))
+      const clampedBoxWidth = Math.max(1, Math.min(boxWidth, containerWidth - clampedBoxX))
+      const clampedBoxHeight = Math.max(1, Math.min(boxHeight, containerHeight - clampedBoxY))
       
-      // 设置车辆样式（绿色）
-      ctx.strokeStyle = '#2ed573'
-      ctx.lineWidth = 3
-      ctx.fillStyle = 'rgba(46, 213, 115, 0.1)'
+      console.log(`🚗 车辆${index + 1} bbox绘制:`, {
+        原始坐标: [x1, y1, x2, y2],
+        显示坐标: [displayX1.toFixed(1), displayY1.toFixed(1), displayX2.toFixed(1), displayY2.toFixed(1)],
+        计算框: { x: boxX.toFixed(1), y: boxY.toFixed(1), w: boxWidth.toFixed(1), h: boxHeight.toFixed(1) },
+        限制框: { x: clampedBoxX.toFixed(1), y: clampedBoxY.toFixed(1), w: clampedBoxWidth.toFixed(1), h: clampedBoxHeight.toFixed(1) },
+        显示区域: { w: containerWidth.toFixed(1), h: containerHeight.toFixed(1) }
+      })
       
-      // 绘制矩形
-      ctx.fillRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
-      ctx.strokeRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
-      
-      // 绘制标签
-      const label = `${vehicle.type || '车辆'}${vehicle.id || (index + 1)}: ${vehicle.status || '未知'}`
-      ctx.fillStyle = '#2ed573'
-      ctx.font = '14px Arial'
-      
-      // 标签背景
-      const textMetrics = ctx.measureText(label)
-      const labelX = Math.max(offsetX, Math.min(clampedBoxX, offsetX + displayWidth - textMetrics.width - 8))
-      const labelY = Math.max(offsetY + 20, clampedBoxY)
-      
-      ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
-      
-      // 标签文字
-      ctx.fillStyle = 'white'
-      ctx.fillText(label, labelX + 4, labelY - 6)
+      // 只有当bbox有有效尺寸时才绘制
+      if (clampedBoxWidth > 2 && clampedBoxHeight > 2) {
+        // 设置车辆样式（绿色）
+        ctx.strokeStyle = '#2ed573'
+        ctx.lineWidth = 3
+        ctx.fillStyle = 'rgba(46, 213, 115, 0.1)'
+        
+        // 绘制矩形
+        ctx.fillRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
+        ctx.strokeRect(clampedBoxX, clampedBoxY, clampedBoxWidth, clampedBoxHeight)
+        
+        // 绘制标签
+        const label = `${vehicle.type || '车辆'}${vehicle.id || (index + 1)}: ${vehicle.status || '未知'}`
+        ctx.fillStyle = '#2ed573'
+        ctx.font = '14px Arial'
+        
+        // 标签背景
+        const textMetrics = ctx.measureText(label)
+        const labelX = Math.max(0, Math.min(clampedBoxX, containerWidth - textMetrics.width - 8))
+        const labelY = Math.max(20, clampedBoxY)
+        
+        ctx.fillRect(labelX, labelY - 20, textMetrics.width + 8, 20)
+        
+        // 标签文字
+        ctx.fillStyle = 'white'
+        ctx.fillText(label, labelX + 4, labelY - 6)
+      } else {
+        console.warn(`⚠️ 车辆${index + 1} bbox尺寸过小，跳过绘制`)
+      }
     })
   }
 }
@@ -1563,60 +1611,70 @@ function onThumbnailError(event: Event) {
 }
 
 .inference-display {
-  flex: 1;
+  flex: 0 0 auto; /* 固定高度，不允许收缩 */
   display: flex;
   gap: 16px;
   padding: 16px;
+  height: 450px; /* 设置合适的固定高度 */
 }
 
 .video-section {
   flex: 2;
+  min-width: 0; /* 防止flex子项溢出 */
+  display: flex;
+  flex-direction: column;
 }
 
 .video-player-container {
   position: relative;
   width: 100%;
-  height: 400px; /* 设置固定高度 */
-  max-height: 500px;
-  min-height: 300px;
+  flex: 1; /* 占据video-section的全部高度 */
   background: #000;
   border-radius: 8px;
   overflow: hidden;
 }
 
 .inference-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  width: auto; /* 改为自动宽度 */
+  height: auto; /* 改为自动高度 */
+  max-width: 100%; /* 限制最大宽度 */
+  max-height: 100%; /* 限制最大高度 */
+  object-fit: none; /* 改为不缩放，保持原始尺寸 */
   border-radius: 8px;
 }
 
 /* 图像显示样式 */
 .inference-image-container {
   position: relative;
-  width: 100%;
-  height: 100%;
+  width: auto; /* 改为自动宽度 */
+  height: auto; /* 改为自动高度 */
+  max-width: 100%; /* 限制最大宽度 */
+  max-height: 100%; /* 限制最大高度 */
   display: flex;
   justify-content: center;
   align-items: center;
-  background: #000;
+  background: transparent; /* 移除黑色背景 */
 }
 
 .inference-image {
+  width: auto; /* 改为自动宽度 */
+  height: auto; /* 改为自动高度 */
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain;
+  object-fit: none; /* 改为不缩放，保持原始尺寸 */
   border-radius: 8px;
 }
 
 .inference-video-container {
   position: relative;
-  width: 100%;
-  height: 100%;
+  width: auto; /* 改为自动宽度 */
+  height: auto; /* 改为自动高度 */
+  max-width: 100%; /* 限制最大宽度 */
+  max-height: 100%; /* 限制最大高度 */
   display: flex;
   justify-content: center;
   align-items: center;
-  background: #000;
+  background: transparent; /* 移除黑色背景 */
 }
 
 .media-info {
@@ -1746,8 +1804,12 @@ function onThumbnailError(event: Event) {
 
 /* 历史记录区域样式 */
 .history-section {
+  flex: 1; /* 占据剩余空间 */
+  min-height: 250px; /* 确保最小高度 */
   border-top: 1px solid #e6e6e6;
   background: #f8f9fa;
+  display: flex;
+  flex-direction: column;
 }
 
 .history-header {
@@ -1907,5 +1969,108 @@ function onThumbnailError(event: Event) {
   background: #fef2f2;
   color: #dc2626;
   border: 1px solid #ef4444;
+}
+
+/* 添加info-panel的样式定义 */
+.info-panel {
+  flex: 1;
+  min-width: 300px; /* 设置最小宽度 */
+  max-width: 400px; /* 设置最大宽度 */
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e6e6e6;
+  overflow-y: auto; /* 内容过多时可滚动 */
+}
+
+.info-panel h4 {
+  margin: 0 0 16px 0;
+  color: #303133;
+  font-size: 16px;
+  font-weight: 600;
+  border-bottom: 2px solid #409eff;
+  padding-bottom: 8px;
+}
+
+.info-panel h5 {
+  margin: 16px 0 8px 0;
+  color: #606266;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.info-panel h6 {
+  margin: 12px 0 6px 0;
+  color: #909399;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.detail-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #e6e6e6;
+}
+
+.detail-section:last-child {
+  margin-bottom: 0;
+}
+
+.people-list, .vehicles-list {
+  margin-top: 12px;
+}
+
+.person-item, .vehicle-item {
+  margin-bottom: 8px;
+  padding: 8px;
+  background: #f0f9ff;
+  border-radius: 4px;
+  border-left: 3px solid #409eff;
+}
+
+.person-header, .vehicle-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.person-id, .vehicle-id {
+  font-weight: 600;
+  color: #303133;
+  font-size: 13px;
+}
+
+.person-activity, .vehicle-status {
+  font-size: 12px;
+  color: #606266;
+  background: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.person-bbox, .vehicle-bbox {
+  font-size: 11px;
+  color: #909399;
+  font-family: monospace;
+}
+
+.waiting-message {
+  color: #606266;
+  font-size: 14px;
+  margin: 8px 0;
+}
+
+.waiting-hint {
+  color: #909399;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.highlight {
+  font-weight: 600;
+  color: #409eff;
 }
 </style> 

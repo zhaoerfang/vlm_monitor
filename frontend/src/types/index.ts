@@ -47,15 +47,36 @@ export interface VideoInfo {
 // 推理日志项
 export interface InferenceLogItem {
   video_path: string
-  result: string
-  video_info: VideoInfo
-  inference_start_time: number
-  inference_end_time: number
-  inference_start_timestamp: string
-  inference_end_timestamp: string
-  inference_duration: number
-  result_received_at: number
+  result?: string
+  video_info?: VideoInfo
+  inference_start_time?: number
+  inference_end_time?: number
+  inference_start_timestamp?: string
+  inference_end_timestamp?: string
+  inference_duration?: number
+  result_received_at?: number
   parsed_result?: InferenceResult
+  
+  // 新增字段（来自后端）
+  video_id?: string
+  has_inference_result?: boolean
+  timestamp?: string
+  creation_timestamp?: string
+  total_frames?: number
+  frames_per_second?: number
+  target_duration?: number
+  sampled_frames?: any[]
+  creation_time?: string
+  session_dir?: string
+  filename?: string
+  
+  // AI推理结果字段
+  people_count?: number
+  vehicle_count?: number
+  people?: Person[]
+  vehicles?: Vehicle[]
+  summary?: string
+  raw_result?: string
 }
 
 // 实验日志
