@@ -1,0 +1,32 @@
+{
+  "mcp_model": {
+    "api_key": "sk-88c79b5d716645f39a44b0e5ce2d4541",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen3-14b",
+    "temperature": 0.1,
+    "max_tokens": 6000,
+    "comment": "MCP摄像头控制系统专用模型配置，用于解析自然语言指令并生成摄像头控制命令"
+  },
+  "camera": {
+    "default_ip": "192.168.1.64",
+    "default_admin": "admin",
+    "default_password": "pw4hkcamera",
+    "connection_timeout": 30,
+    "retry_attempts": 3,
+    "comment": "摄像头连接的默认配置"
+  },
+  "server": {
+    "name": "Camera Control Server",
+    "version": "0.1.0",
+    "transport": "stdio",
+    "log_level": "INFO",
+    "comment": "MCP Server 配置"
+  },
+  "client": {
+    "connection_timeout": 30,
+    "retry_attempts": 3,
+    "interactive_mode": true,
+    "log_level": "INFO",
+    "comment": "MCP Client 配置"
+  }
+} 

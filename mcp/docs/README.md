@@ -1,0 +1,4 @@
+- 使用uv制作一个可以控制摄像头转动的mcp server；
+- 相关的demo在 examples/test.py里，具体的摄像头转动功能实现在 examples/Camera.py里;
+- 写好这个mcp server之后，再写一个mcp_client, 使得这个mcp可以和mcp_server进行通信，并控制摄像头转动。
+- 在mcp_client里，会涉及到模型，我们的模型使用openai接口，其中base_url, api_key, model_name通过config.json进行配置。

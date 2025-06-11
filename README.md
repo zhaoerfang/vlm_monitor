@@ -10,6 +10,7 @@
 - **非阻塞架构**: RTSP接收、视频处理和AI推理完全异步，互不阻塞
 - **自动文件管理**: 自动控制视频文件大小（<100MB）和清理临时文件
 - **告警系统**: 支持关键词检测和自定义告警回调
+- **🎥 MCP摄像头控制**: 基于Model Context Protocol的智能摄像头控制系统
 
 ## 系统架构
 
@@ -48,6 +49,45 @@ export DASHSCOPE_API_KEY="your_api_key_here"
 ### 2. 准备RTSP流
 
 确保你有可访问的RTSP摄像头或测试流。
+
+## MCP摄像头控制系统
+
+本项目新增了基于Model Context Protocol (MCP)的摄像头控制系统，支持通过AI自然语言指令控制摄像头。
+
+### 快速开始
+
+```bash
+# 进入MCP目录
+cd mcp/
+
+# 启动MCP Server（在一个终端中）
+python start_camera_system.py server
+
+# 启动MCP Client（在另一个终端中）
+python start_camera_system.py client
+
+# 或者运行系统测试
+python start_camera_system.py test
+```
+
+### MCP功能特性
+
+- **🤖 AI智能控制**: 支持自然语言指令，如"向左转动3秒"、"拍一张照片"
+- **🔧 直接工具调用**: 支持JSON格式的精确控制
+- **📊 状态监控**: 实时查看摄像头连接状态
+- **🎮 交互界面**: 友好的命令行交互界面
+- **🔗 独立模型配置**: MCP系统使用独立的 `mcp_model` 配置，与VLM监控系统分离
+
+### 支持的摄像头操作
+
+- 水平/垂直转动控制
+- 摄像头拍照
+- 变焦控制
+- 预设点位移动
+- 图像参数调整（亮度、对比度、饱和度）
+- 摄像头连接配置
+
+详细使用说明请参考：[mcp/README.md](mcp/README.md)
 
 ## 使用方法
 
