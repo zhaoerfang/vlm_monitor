@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from openai import AsyncOpenAI
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.types import AnyUrl
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -22,13 +23,17 @@ logger = logging.getLogger(__name__)
 class CameraClient:
     """摄像头控制客户端"""
     
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: Optional[str] = None):
         """
         初始化客户端
         
         Args:
-            config_path: 配置文件路径
+            config_path: 配置文件路径，默认使用项目根目录的 config.json
         """
+        if config_path is None:
+            # 默认使用项目根目录的 config.json
+            config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))), 'config.json')
+        
         self.config = self._load_config(config_path)
         self.openai_client = self._init_openai_client()
         self.mcp_session: Optional[ClientSession] = None
@@ -88,8 +93,10 @@ class CameraClient:
             # 创建 server 参数
             server_params = StdioServerParameters(
                 command="python",
-                args=[server_path],
-                env=None
+                # args=[server_path],
+                args=["-m","camera_mcp.cores.camera_server"],
+                env=None,
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             )
             
             # 连接到 server
@@ -107,7 +114,7 @@ class CameraClient:
             return True
             
         except Exception as e:
-            logger.error(f"连接 MCP server 失败: {e}")
+            logger.info(f"连接 MCP server 失败: {e}")
             return False
     
     async def disconnect_from_mcp_server(self):
@@ -141,7 +148,11 @@ class CameraClient:
             if hasattr(result, 'content') and result.content:
                 # 提取文本内容
                 if isinstance(result.content, list) and len(result.content) > 0:
-                    return result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
+                    content_item = result.content[0]
+                    if hasattr(content_item, 'text'):
+                        return content_item.text
+                    else:
+                        return str(content_item)
                 else:
                     return str(result.content)
             else:
@@ -156,7 +167,7 @@ class CameraClient:
             raise RuntimeError("未连接到 MCP server")
         
         try:
-            result = await self.mcp_session.read_resource("camera://status")
+            result = await self.mcp_session.read_resource(AnyUrl("camera://status"))
             return result[0] if isinstance(result, tuple) else str(result)
         except Exception as e:
             logger.error(f"获取摄像头状态失败: {e}")
@@ -167,7 +178,7 @@ class CameraClient:
         使用 AI 智能控制摄像头
         
         Args:
-            user_instruction: 用户指令，如 "向左转动3秒"、"拍一张照片"等
+            user_instruction: 用户指令，如 "向左转动30度"、"拍一张照片"等
         
         Returns:
             执行结果
@@ -185,13 +196,6 @@ class CameraClient:
 可用的摄像头控制工具：
 {chr(10).join(tool_descriptions)}
 
-工具参数说明：
-- pan_tilt_move: pan_speed(水平速度，-100到100，正数右转，负数左转), tilt_speed(垂直速度，-100到100，正数上升，负数下降), duration(持续时间，秒)
-- capture_image: img_name(图片名称，可选)
-- goto_preset: point(预设点位编号)
-- zoom_control: zoom_level(变焦级别，正数放大，负数缩小), duration(持续时间，秒)
-- adjust_image_settings: brightness(亮度0-100), contrast(对比度0-100), saturation(饱和度0-100)
-- setup_camera: ip(摄像头IP), admin(用户名), password(密码)
 
 请根据用户指令，返回一个JSON格式的工具调用，格式如下：
 {{
@@ -293,10 +297,11 @@ class CameraClient:
 
 直接工具调用：
   call <tool_name> <json_args>
-  例如: call pan_tilt_move {"pan_speed": -50, "tilt_speed": 0, "duration": 3}
+  例如: call pan_tilt_move {"pan_angle": -30, "tilt_speed": 0, "duration": 0}
 
 AI 智能控制（直接输入自然语言）：
-  "向左转动3秒"
+  "向左转动30度"
+  "向右转45度"
   "拍一张照片"
   "放大镜头"
   "移动到预设点位1"

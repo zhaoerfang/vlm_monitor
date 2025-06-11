@@ -52,9 +52,9 @@ test = [
 ]
 
 [project.scripts]
-camera-mcp-server = "camera_mcp.camera_server:main"
-camera-mcp-client = "camera_mcp.camera_client:main"
-camera-mcp = "camera_mcp.cli:main"
+camera-mcp-server = "camera_mcp.cores.camera_server:main"
+camera-mcp-client = "camera_mcp.cores.camera_client:main"
+camera-mcp = "camera_mcp.cli:cli_main"
 
 [project.urls]
 Homepage = "https://github.com/vlm-monitor/camera-mcp"

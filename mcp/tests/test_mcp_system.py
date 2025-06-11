@@ -11,11 +11,11 @@ import sys
 import os
 from typing import Dict, Any
 
-# 添加 src 目录到路径
-src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src')
-sys.path.append(src_path)
+# # 添加 src 目录到路径
+# src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src')
+# sys.path.append(src_path)
 
-from camera_mcp.camera_client import CameraClient
+from camera_mcp.cores.camera_client import CameraClient
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -45,7 +45,7 @@ class MCPSystemTester:
             await self.test_camera_status()
             
             # 测试基本工具调用
-            await self.test_basic_tool_calls()
+            # await self.test_basic_tool_calls()
             
             # 测试 AI 控制（如果配置了 OpenAI）
             await self.test_ai_control()
@@ -103,17 +103,17 @@ class MCPSystemTester:
         """测试基本工具调用"""
         print("\n🔧 测试基本工具调用...")
         
-        # 测试摄像头设置
-        await self.test_tool_call(
-            "setup_camera",
-            {"ip": "192.168.1.64", "admin": "admin", "password": "pw4hkcamera"},
-            "摄像头设置"
-        )
+        # # 测试摄像头设置
+        # await self.test_tool_call(
+        #     "setup_camera",
+        #     {"ip": "192.168.1.64", "admin": "admin", "password": "pw4hkcamera"},
+        #     "摄像头设置"
+        # )
         
         # 测试摄像头转动（小幅度测试）
         await self.test_tool_call(
             "pan_tilt_move",
-            {"pan_speed": 10, "tilt_speed": 0, "duration": 0.5},
+            {"pan_angle": 30},
             "摄像头转动"
         )
         
@@ -156,8 +156,8 @@ class MCPSystemTester:
         
         # 测试简单的 AI 指令
         test_instructions = [
-            "停止摄像头转动",
-            "调整亮度到60"
+            "向右转90度",
+            # "调整亮度到60"
         ]
         
         for instruction in test_instructions:

@@ -10,7 +10,7 @@ import os
 # 创建日志目录（如果不存在）- 相对于 mcp/ 目录
 # 当前文件路径: mcp/src/camera_mcp/utils/Camera.py
 # 目标路径: mcp/logs/
-log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'logs')
+log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'logs')
 os.makedirs(log_dir, exist_ok=True)
 
 logging.basicConfig(filename=os.path.join(log_dir, 'camera_log.txt'),
@@ -99,6 +99,26 @@ class Camera(object):
         session = requests.Session()
         url = 'http://%s/ISAPI/PTZCtrl/channels/1/presets/%d/goto' % (self.ip, point)
         session.put(url, auth=HTTPDigestAuth(self.admin, self.password))
+
+    @print_log
+    def goto_preset_point(self, point_id=1):
+        """
+        调用预设点，让云台转到指定预设点位置
+        """
+        url = f"http://{self.ip}/ISAPI/PTZCtrl/channels/1/presets/{point_id}/goto"
+        payload = f"""<?xml version="1.0" encoding="UTF-8"?>
+<PTZPreset>
+  <id>{point_id}</id>
+</PTZPreset>"""
+        headers = {'Content-Type': 'application/xml'}
+        response = requests.put(url, data=payload, headers=headers,
+                                auth=HTTPDigestAuth(self.admin, self.password))
+        print(f"[调用预设点] 状态码: {response.status_code}")
+        if response.status_code in (200, 201, 204):
+            print(f"预设点 {point_id} 调用成功")
+        else:
+            print(f"⚠️ 预设点调用失败，状态码: {response.status_code}, 返回: {response.text}")
+
 
     @print_log
     def pan_tilt_move(self, pan_speed=0, tilt_speed=0, second=1.0):

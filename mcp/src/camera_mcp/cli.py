@@ -69,14 +69,14 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def run_server(config_path: Optional[str] = None):
+def run_server(config_path: Optional[str] = None):
     """启动 MCP Server"""
     print("🚀 启动 MCP Server...")
     print("按 Ctrl+C 停止服务器")
     print("-" * 40)
     
     try:
-        from .camera_server import main as server_main
+        from .cores.camera_server import main as server_main
         server_main()
     except KeyboardInterrupt:
         print("\n🛑 服务器已停止")
@@ -92,7 +92,7 @@ async def run_client(config_path: Optional[str] = None):
     print("-" * 40)
     
     try:
-        from .camera_client import main as client_main
+        from .cores.camera_client import main as client_main
         await client_main()
     except KeyboardInterrupt:
         print("\n🛑 客户端已停止")
@@ -120,7 +120,8 @@ async def run_test(config_path: Optional[str] = None):
             from test_mcp_system import main as test_main
             await test_main()
         else:
-            print("❌ 测试文件未找到")
+            print(f"❌ 测试文件未找到: {test_module_path}")
+            print("请确保测试文件存在")
             sys.exit(1)
             
     except Exception as e:
@@ -181,7 +182,7 @@ def check_config(config_path: Optional[str] = None):
         return False
 
 
-async def main():
+def main():
     """主函数"""
     parser = create_parser()
     args = parser.parse_args()
@@ -199,17 +200,19 @@ async def main():
     
     # 执行相应命令
     if args.command == 'server':
-        await run_server(args.config)
+        run_server(args.config)
     elif args.command == 'client':
-        await run_client(args.config)
+        # 对于异步命令，使用 asyncio.run
+        asyncio.run(run_client(args.config))
     elif args.command == 'test':
-        await run_test(args.config)
+        # 对于异步命令，使用 asyncio.run
+        asyncio.run(run_test(args.config))
 
 
 def cli_main():
     """CLI 入口点"""
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         print("\n👋 程序被用户中断")
     except Exception as e:

@@ -11,13 +11,25 @@ __version__ = "0.1.0"
 __author__ = "VLM Monitor Team"
 __email__ = "admin@example.com"
 
-from .camera_server import main as run_server
-from .camera_client import CameraClient, main as run_client
+# 延迟导入，避免在包导入时就加载所有模块
 from .utils.Camera import Camera
 
 __all__ = [
-    "run_server",
-    "run_client", 
-    "CameraClient",
     "Camera",
-] 
+]
+
+# 提供便捷的导入函数，但不在包级别导入
+def get_server_main():
+    """获取 server main 函数"""
+    from .cores.camera_server import main
+    return main
+
+def get_client_main():
+    """获取 client main 函数"""
+    from .cores.camera_client import main
+    return main
+
+def get_camera_client():
+    """获取 CameraClient 类"""
+    from .cores.camera_client import CameraClient
+    return CameraClient 
