@@ -108,232 +108,268 @@
             </div>
             
             <div v-else class="inference-display">
-              <div class="video-section">
-                <div class="video-player-container">
-                  <!-- 图像显示 -->
-                  <div v-if="isCurrentInferenceImage" class="inference-image-container">
-                    <img 
-                      ref="inferenceImage"
-                      :src="getMediaUrl(currentInference.filename || getVideoFileName(currentInference.video_path))"
-                      class="inference-image"
-                      @load="onStreamLoad"
-                      @error="onStreamError"
-                    />
-                    
-                    <!-- 图像覆盖层用于显示bbox -->
-                    <canvas 
-                      v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
-                      ref="bboxCanvas"
-                      class="bbox-overlay"
-                      @click="toggleBboxDisplay"
-                    ></canvas>
-                  </div>
-                  
-                  <!-- 视频显示 -->
-                  <div v-else class="inference-video-container">
-                    <video 
-                      v-if="currentInference.video_path"
-                      ref="inferenceVideo"
-                      :src="getVideoUrl(currentInference.video_path)"
-                      controls
-                      autoplay
-                      loop
-                      muted
-                      class="inference-video"
-                      @loadedmetadata="onVideoLoaded"
-                      @error="onVideoError"
-                      @loadstart="onVideoLoadStart"
-                      @resize="onVideoResize"
-                    ></video>
-                    
-                    <!-- 视频覆盖层用于显示bbox -->
-                    <canvas 
-                      v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
-                      ref="bboxCanvas"
-                      class="bbox-overlay"
-                      @click="toggleBboxDisplay"
-                    ></canvas>
-                  </div>
-                  
-                  <div class="media-info">
-                    <p v-if="isCurrentInferenceImage">
-                      <strong>图像文件:</strong> {{ currentInference.filename || getVideoFileName(currentInference.video_path) }}
-                    </p>
-                    <p v-else>
-                      <strong>视频文件:</strong> {{ getVideoFileName(currentInference.video_path) }}
-                    </p>
-                    
-                    <p v-if="currentInference.frame_number">
-                      <strong>帧号:</strong> {{ currentInference.frame_number }}
-                    </p>
-                    <p v-if="currentInference.total_frames">
-                      <strong>总帧数:</strong> {{ currentInference.total_frames }}
-                    </p>
-                    <p v-if="currentInference.sampled_frames">
-                      <strong>采样帧数:</strong> {{ currentInference.sampled_frames.length }}
-                    </p>
-                    
-                    <p v-if="currentInference.has_inference_result" class="ai-status success">✅ AI分析完成</p>
-                    <p v-else class="ai-status pending">⏳ 等待AI分析</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div class="info-panel">
-                <h4>推理详情</h4>
-                
-                <!-- AI回答区域 - 放在最顶部，始终显示 -->
-                <div class="detail-section ai-response-section">
-                  <h5>AI回答</h5>
-                  <div class="ai-response-content">
-                    <div v-if="currentInference.user_question" class="user-question">
-                      <strong>用户问题：</strong>{{ currentInference.user_question }}
-                    </div>
-                    <div v-else class="no-question">
-                      <span class="no-question-text">暂无用户问题</span>
-                    </div>
-                    <div class="ai-answer">
-                      <strong>AI回答：</strong>
-                      <div class="response-text">
-                        <span v-if="currentInference.response || currentInference.ai_response || extractAIResponse(currentInference.raw_result)">
-                          {{ currentInference.response || currentInference.ai_response || extractAIResponse(currentInference.raw_result) }}
-                        </span>
-                        <span v-else class="no-response-text">
-                          暂无AI回答（用户未提问）
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div class="detail-section">
-                  <h5>基本信息</h5>
-                  <div class="detail-item">
-                    <label>推理耗时:</label>
-                    <span>{{ getInferenceDuration(currentInference) }}秒</span>
-                  </div>
-                  <div class="detail-item">
-                    <label>视频时长:</label>
-                    <span>{{ currentInference.target_duration || 3 }}秒</span>
-                  </div>
-                  <div class="detail-item">
-                    <label>采样帧数:</label>
-                    <span>{{ currentInference.sampled_frames?.length || 0 }}帧</span>
-                  </div>
-                </div>
-                
-                <div v-if="currentInference.has_inference_result" class="detail-section">
-                  <h5>AI分析结果</h5>
-                  <div class="detail-item">
-                    <label>检测人数:</label>
-                    <span class="highlight">{{ currentInference.people_count || 0 }}人</span>
-                  </div>
-                  <div class="detail-item">
-                    <label>检测车辆:</label>
-                    <span class="highlight">{{ currentInference.vehicle_count || 0 }}辆</span>
-                  </div>
-                  <div class="detail-item">
-                    <label>场景描述:</label>
-                    <span>{{ currentInference.summary || '无描述' }}</span>
-                  </div>
-                  
-                  <div v-if="currentInference.people && currentInference.people.length > 0" class="people-list">
-                    <h6>人员详情</h6>
-                    <div v-for="(person, index) in currentInference.people" :key="index" class="person-item">
-                      <div class="person-header">
-                        <span class="person-id">人员 {{ person.id || (index + 1) }}</span>
-                        <span class="person-activity">{{ person.activity || '未知活动' }}</span>
-                      </div>
-                      <div class="person-bbox" v-if="person.bbox">
-                        位置: [{{ person.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div v-if="currentInference.vehicles && currentInference.vehicles.length > 0" class="vehicles-list">
-                    <h6>车辆详情</h6>
-                    <div v-for="(vehicle, index) in currentInference.vehicles" :key="index" class="vehicle-item">
-                      <div class="vehicle-header">
-                        <span class="vehicle-id">{{ vehicle.type }} {{ vehicle.id || (index + 1) }}</span>
-                        <span class="vehicle-status">{{ vehicle.status || '未知状态' }}</span>
-                      </div>
-                      <div class="vehicle-bbox" v-if="vehicle.bbox">
-                        位置: [{{ vehicle.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div v-else class="detail-section">
-                  <h5>等待AI分析</h5>
-                  <p class="waiting-message">视频已采样完成，正在等待AI模型分析结果...</p>
-                  <p class="waiting-hint">通常需要10-15秒时间</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- 历史记录区域 -->
-          <div class="history-section">
-            <div class="history-header">
-              <h4>历史记录</h4>
-              <div class="history-controls">
-                <button @click="loadMediaHistory" :disabled="isLoadingHistory" class="btn btn-sm btn-secondary">
-                  {{ isLoadingHistory ? '加载中...' : '刷新历史' }}
-                </button>
-                <span class="history-count">{{ mediaHistory.length }} 项</span>
-              </div>
-            </div>
-            
-            <div class="history-container">
-              <div v-if="mediaHistory.length === 0" class="history-placeholder">
-                <div class="placeholder-content">
-                  <div class="icon">📂</div>
-                  <p>暂无历史记录</p>
-                  <p class="hint">推理结果将显示在这里</p>
-                </div>
-              </div>
-              
-              <div v-else class="history-scroll">
-                <div 
-                  v-for="(item, index) in mediaHistory" 
-                  :key="item.filename"
-                  class="history-item"
-                  :class="{ 'active': selectedHistoryItem?.filename === item.filename }"
-                  @click="selectHistoryItem(item)"
-                >
-                  <div class="history-thumbnail">
-                    <div v-if="item.type === 'image'" class="thumbnail-image">
+              <div class="left-section">
+                <div class="video-section">
+                  <div class="video-player-container">
+                    <!-- 图像显示 -->
+                    <div v-if="isCurrentInferenceImage" class="inference-image-container">
                       <img 
-                        :src="getMediaUrl(item.filename)" 
-                        :alt="item.filename"
-                        @error="onThumbnailError"
+                        ref="inferenceImage"
+                        :src="getMediaUrl(currentInference.filename || getVideoFileName(currentInference.video_path))"
+                        class="inference-image"
+                        @load="onStreamLoad"
+                        @error="onStreamError"
                       />
-                      <div class="media-type-badge image">📷</div>
+                      
+                      <!-- 图像覆盖层用于显示bbox -->
+                      <canvas 
+                        v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
+                        ref="bboxCanvas"
+                        class="bbox-overlay"
+                        @click="toggleBboxDisplay"
+                      ></canvas>
                     </div>
-                    <div v-else class="thumbnail-video">
+                    
+                    <!-- 视频显示 -->
+                    <div v-else class="inference-video-container">
                       <video 
-                        :src="getMediaUrl(item.filename)"
+                        v-if="currentInference.video_path"
+                        ref="inferenceVideo"
+                        :src="getVideoUrl(currentInference.video_path)"
+                        controls
+                        autoplay
+                        loop
                         muted
-                        preload="metadata"
-                        @error="onThumbnailError"
+                        class="inference-video"
+                        @loadedmetadata="onVideoLoaded"
+                        @error="onVideoError"
+                        @loadstart="onVideoLoadStart"
+                        @resize="onVideoResize"
                       ></video>
-                      <div class="media-type-badge video">🎬</div>
+                      
+                      <!-- 视频覆盖层用于显示bbox -->
+                      <canvas 
+                        v-if="currentInference.has_inference_result && (currentInference.people || currentInference.vehicles)"
+                        ref="bboxCanvas"
+                        class="bbox-overlay"
+                        @click="toggleBboxDisplay"
+                      ></canvas>
+                    </div>
+                    
+                    <div class="media-info">
+                      <p v-if="isCurrentInferenceImage">
+                        <strong>图像文件:</strong> {{ currentInference.filename || getVideoFileName(currentInference.video_path) }}
+                      </p>
+                      <p v-else>
+                        <strong>视频文件:</strong> {{ getVideoFileName(currentInference.video_path) }}
+                      </p>
+                      
+                      <p v-if="currentInference.frame_number">
+                        <strong>帧号:</strong> {{ currentInference.frame_number }}
+                      </p>
+                      <p v-if="currentInference.total_frames">
+                        <strong>总帧数:</strong> {{ currentInference.total_frames }}
+                      </p>
+                      <p v-if="currentInference.sampled_frames">
+                        <strong>采样帧数:</strong> {{ currentInference.sampled_frames.length }}
+                      </p>
+                      
+                      <p v-if="currentInference.has_inference_result" class="ai-status success">✅ AI分析完成</p>
+                      <p v-else class="ai-status pending">⏳ 等待AI分析</p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div class="info-panel">
+                  <h4>推理详情</h4>
+                  
+                  <!-- 思考与行动区域 - 放在最顶部 -->
+                  <div v-if="currentInference.has_mcp_result" class="detail-section mcp-action-section">
+                    <h5>思考与行动</h5>
+                    <div class="mcp-action-content">
+                      <div v-if="currentInference.mcp_reason" class="mcp-thinking">
+                        <strong>思考过程：</strong>
+                        <div class="thinking-text">{{ currentInference.mcp_reason }}</div>
+                      </div>
+                      <div v-if="currentInference.mcp_result" class="mcp-action">
+                        <strong>执行行动：</strong>
+                        <div class="action-text">{{ currentInference.mcp_result }}</div>
+                      </div>
+                      <div v-if="currentInference.mcp_tool_name" class="mcp-tool-info">
+                        <div class="tool-details">
+                          <span class="tool-name">工具: {{ currentInference.mcp_tool_name }}</span>
+                          <span class="tool-status" :class="{ 'success': currentInference.mcp_success, 'failed': !currentInference.mcp_success }">
+                            {{ currentInference.mcp_success ? '✅ 成功' : '❌ 失败' }}
+                          </span>
+                        </div>
+                        <div v-if="currentInference.mcp_arguments && Object.keys(currentInference.mcp_arguments).length > 0" class="tool-arguments">
+                          <strong>参数：</strong>
+                          <span v-for="(value, key) in currentInference.mcp_arguments" :key="key" class="argument-item">
+                            {{ key }}: {{ value }}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   
-                  <div class="history-info">
-                    <div class="history-title">
-                      {{ item.type === 'image' ? `帧 ${item.frame_number}` : `视频 ${index + 1}` }}
+                  <!-- AI回答区域 -->
+                  <div class="detail-section ai-response-section">
+                    <h5>AI回答</h5>
+                    <div class="ai-response-content">
+                      <div v-if="currentInference.user_question" class="user-question">
+                        <strong>用户问题：</strong>{{ currentInference.user_question }}
+                      </div>
+                      <div v-else class="no-question">
+                        <span class="no-question-text">暂无用户问题</span>
+                      </div>
+                      <div class="ai-answer">
+                        <strong>AI回答：</strong>
+                        <div class="response-text">
+                          <span v-if="currentInference.response || currentInference.ai_response || extractAIResponse(currentInference.raw_result)">
+                            {{ currentInference.response || currentInference.ai_response || extractAIResponse(currentInference.raw_result) }}
+                          </span>
+                          <span v-else class="no-response-text">
+                            暂无AI回答（用户未提问）
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div class="history-time">
-                      {{ formatHistoryTime(item.timestamp || item.creation_timestamp) }}
+                  </div>
+                  
+                  <div class="detail-section">
+                    <h5>基本信息</h5>
+                    <div class="detail-item">
+                      <label>推理耗时:</label>
+                      <span>{{ getInferenceDuration(currentInference) }}秒</span>
                     </div>
-                    <div class="history-status">
-                      <span v-if="item.has_inference_result" class="status-badge success">
-                        ✅ {{ item.people_count || 0 }}人 {{ item.vehicle_count || 0 }}车
-                      </span>
-                      <span v-else class="status-badge pending">⏳ 等待分析</span>
+                    <div class="detail-item">
+                      <label>视频时长:</label>
+                      <span>{{ currentInference.target_duration || 3 }}秒</span>
+                    </div>
+                    <div class="detail-item">
+                      <label>采样帧数:</label>
+                      <span>{{ currentInference.sampled_frames?.length || 0 }}帧</span>
+                    </div>
+                  </div>
+                  
+                  <div v-if="currentInference.has_inference_result" class="detail-section">
+                    <h5>AI分析结果</h5>
+                    <div class="detail-item">
+                      <label>检测人数:</label>
+                      <span class="highlight">{{ currentInference.people_count || 0 }}人</span>
+                    </div>
+                    <div class="detail-item">
+                      <label>检测车辆:</label>
+                      <span class="highlight">{{ currentInference.vehicle_count || 0 }}辆</span>
+                    </div>
+                    <div class="detail-item">
+                      <label>场景描述:</label>
+                      <span>{{ currentInference.summary || '无描述' }}</span>
+                    </div>
+                    
+                    <div v-if="currentInference.people && currentInference.people.length > 0" class="people-list">
+                      <h6>人员详情</h6>
+                      <div v-for="(person, index) in currentInference.people" :key="index" class="person-item">
+                        <div class="person-header">
+                          <span class="person-id">人员 {{ person.id || (index + 1) }}</span>
+                          <span class="person-activity">{{ person.activity || '未知活动' }}</span>
+                        </div>
+                        <div class="person-bbox" v-if="person.bbox">
+                          位置: [{{ person.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div v-if="currentInference.vehicles && currentInference.vehicles.length > 0" class="vehicles-list">
+                      <h6>车辆详情</h6>
+                      <div v-for="(vehicle, index) in currentInference.vehicles" :key="index" class="vehicle-item">
+                        <div class="vehicle-header">
+                          <span class="vehicle-id">{{ vehicle.type }} {{ vehicle.id || (index + 1) }}</span>
+                          <span class="vehicle-status">{{ vehicle.status || '未知状态' }}</span>
+                        </div>
+                        <div class="vehicle-bbox" v-if="vehicle.bbox">
+                          位置: [{{ vehicle.bbox.map((v: number) => Math.round(v * 100) / 100).join(', ') }}]
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div v-else class="detail-section">
+                    <h5>等待AI分析</h5>
+                    <p class="waiting-message">视频已采样完成，正在等待AI模型分析结果...</p>
+                    <p class="waiting-hint">通常需要10-15秒时间</p>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- 右侧历史记录区域 -->
+              <div class="right-section">
+                <div class="history-section">
+                  <div class="history-header">
+                    <h4>历史记录</h4>
+                    <div class="history-controls">
+                      <button @click="loadMediaHistory" :disabled="isLoadingHistory" class="btn btn-sm btn-secondary">
+                        {{ isLoadingHistory ? '加载中...' : '刷新历史' }}
+                      </button>
+                      <span class="history-count">{{ mediaHistory.length }} 项</span>
+                    </div>
+                  </div>
+                  
+                  <div class="history-container">
+                    <div v-if="mediaHistory.length === 0" class="history-placeholder">
+                      <div class="placeholder-content">
+                        <div class="icon">📂</div>
+                        <p>暂无历史记录</p>
+                        <p class="hint">推理结果将显示在这里</p>
+                      </div>
+                    </div>
+                    
+                    <div v-else class="history-scroll">
+                      <div 
+                        v-for="(item, index) in mediaHistory" 
+                        :key="item.filename"
+                        class="history-item"
+                        :class="{ 'active': selectedHistoryItem?.filename === item.filename }"
+                        @click="selectHistoryItem(item)"
+                      >
+                        <div class="history-thumbnail">
+                          <div v-if="item.type === 'image'" class="thumbnail-image">
+                            <img 
+                              :src="getMediaUrl(item.filename)" 
+                              :alt="item.filename"
+                              @error="onThumbnailError"
+                            />
+                            <div class="media-type-badge image">📷</div>
+                          </div>
+                          <div v-else class="thumbnail-video">
+                            <video 
+                              :src="getMediaUrl(item.filename)"
+                              muted
+                              preload="metadata"
+                              @error="onThumbnailError"
+                            ></video>
+                            <div class="media-type-badge video">🎬</div>
+                          </div>
+                        </div>
+                        
+                        <div class="history-info">
+                          <div class="history-title">
+                            {{ item.type === 'image' ? `帧 ${item.frame_number}` : `视频 ${index + 1}` }}
+                          </div>
+                          <div class="history-time">
+                            {{ formatHistoryTime(item.timestamp || item.creation_timestamp) }}
+                          </div>
+                          <div class="history-status">
+                            <span v-if="item.has_inference_result && item.has_mcp_result" class="status-badge success">
+                              ✅ {{ item.people_count || 0 }}人 {{ item.vehicle_count || 0 }}车
+                            </span>
+                            <span v-else-if="item.has_inference_result && !item.has_mcp_result" class="status-badge partial">
+                              🔄 等待行动
+                            </span>
+                            <span v-else class="status-badge pending">⏳ 等待分析</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -674,24 +710,24 @@ async function loadInferenceHistory() {
 
 async function loadLatestInference() {
   try {
-    // 优先获取最新的已完成AI分析的推理结果（有inference_result.json的）
+    // 优先获取最新的已完成AI分析且有MCP结果的推理结果
     const aiResponse = await apiService.getLatestInferenceWithAI()
     if (aiResponse.success && aiResponse.data) {
-      console.log('✅ 获取到最新AI分析结果用于播放:', (aiResponse.data as any).video_id, '时间:', (aiResponse.data as any).creation_timestamp)
+      console.log('✅ 获取到最新完整推理结果用于播放:', (aiResponse.data as any).filename || (aiResponse.data as any).video_id, '时间:', (aiResponse.data as any).creation_timestamp || (aiResponse.data as any).timestamp)
       store.addInferenceResult(aiResponse.data)
       return
     }
     
-    // 如果没有AI分析结果，检查是否有任何推理结果（用于显示状态）
+    // 如果没有完整的推理结果，检查是否有任何推理结果（用于显示状态）
     const response = await apiService.getLatestInference()
     if (response.success && response.data) {
-      console.log('✅ 获取到推理结果（等待AI分析）:', (response.data as any).video_id, '时间:', (response.data as any).creation_timestamp)
+      console.log('✅ 获取到推理结果（等待完整分析）:', (response.data as any).video_id, '时间:', (response.data as any).creation_timestamp)
       // 只更新状态，但不用于播放
       store.addInferenceResult(response.data)
       
-      // 如果没有AI分析结果，继续使用之前有AI分析的结果进行播放
+      // 如果没有完整的推理结果，继续使用之前有完整结果的进行播放
       if (!response.data.has_inference_result) {
-        console.log('⏳ 当前推理结果还在等待AI分析，继续播放上一个有AI结果的视频')
+        console.log('⏳ 当前推理结果还在等待完整分析（AI分析+MCP行动），继续播放上一个完整结果')
       }
     } else {
       console.log('⚠️ 没有获取到推理结果:', response.error)
@@ -1618,6 +1654,7 @@ function onThumbnailError(event: Event) {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0; /* 允许flex收缩 */
 }
 
 .placeholder {
@@ -1690,15 +1727,33 @@ function onThumbnailError(event: Event) {
 }
 
 .inference-display {
-  flex: 0 0 auto; /* 固定高度，不允许收缩 */
+  flex: 1; /* 占据可用空间 */
   display: flex;
   gap: 16px;
   padding: 16px;
-  height: 450px; /* 设置合适的固定高度 */
+  height: 100%; /* 占满父容器高度 */
+  min-height: 0; /* 允许flex收缩 */
+}
+
+.left-section {
+  flex: 1; /* 占据大部分空间 */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0; /* 防止flex子项溢出 */
+  height: 100%; /* 确保占满高度 */
+}
+
+.right-section {
+  flex: 0 0 300px; /* 固定宽度300px */
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+  height: 100%; /* 确保占满整个高度 */
 }
 
 .video-section {
-  flex: 2;
+  flex: 0 0 300px; /* 固定高度300px */
   min-width: 0; /* 防止flex子项溢出 */
   display: flex;
   flex-direction: column;
@@ -1970,12 +2025,15 @@ function onThumbnailError(event: Event) {
 
 /* 历史记录区域样式 */
 .history-section {
-  flex: 1; /* 占据剩余空间 */
-  min-height: 250px; /* 确保最小高度 */
-  border-top: 1px solid #e6e6e6;
+  flex: 1; /* 在right-section中占据全部空间 */
   background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e6e6e6;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* 防止内容溢出 */
+  min-height: 0; /* 允许flex收缩 */
+  height: 100%; /* 确保占满父容器高度 */
 }
 
 .history-header {
@@ -2014,24 +2072,31 @@ function onThumbnailError(event: Event) {
 }
 
 .history-container {
-  height: 200px;
+  flex: 1; /* 占据history-section的剩余空间 */
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* 允许flex收缩 */
 }
 
 .history-placeholder {
-  height: 100%;
+  flex: 1; /* 占据全部可用空间 */
   display: flex;
   justify-content: center;
   align-items: center;
+  background: white;
+  border-radius: 6px;
+  margin: 8px;
 }
 
 .history-scroll {
-  height: 100%;
+  flex: 1; /* 占据全部可用空间 */
   overflow-y: auto;
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0; /* 允许flex收缩 */
 }
 
 .history-item {
@@ -2137,16 +2202,100 @@ function onThumbnailError(event: Event) {
   border: 1px solid #ef4444;
 }
 
+.status-badge.partial {
+  background: #fef3c7;
+  color: #d97706;
+  border: 1px solid #f59e0b;
+}
+
+/* 思考与行动区域样式 */
+.mcp-action-section {
+  background: #f0f9ff;
+  border: 1px solid #0ea5e9;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.mcp-action-section h5 {
+  color: #0369a1;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.mcp-action-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mcp-thinking, .mcp-action {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: white;
+  border-left: 3px solid #0ea5e9;
+}
+
+.thinking-text, .action-text {
+  margin-top: 4px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mcp-tool-info {
+  background: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.tool-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.tool-name {
+  font-weight: 500;
+  color: #374151;
+}
+
+.tool-status.success {
+  color: #059669;
+  font-weight: 500;
+}
+
+.tool-status.failed {
+  color: #dc2626;
+  font-weight: 500;
+}
+
+.tool-arguments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.argument-item {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
 /* 添加info-panel的样式定义 */
 .info-panel {
-  flex: 1;
-  min-width: 300px; /* 设置最小宽度 */
-  max-width: 400px; /* 设置最大宽度 */
+  flex: 1; /* 在left-section中占据剩余空间 */
   padding: 16px;
   background: #f8f9fa;
   border-radius: 8px;
   border: 1px solid #e6e6e6;
   overflow-y: auto; /* 内容过多时可滚动 */
+  min-height: 0; /* 允许收缩 */
 }
 
 .info-panel h4 {

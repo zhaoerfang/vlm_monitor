@@ -84,6 +84,17 @@ export interface InferenceLogItem {
   user_question?: string  // 用户问题
   ai_response?: string    // AI回答（从raw_result中提取）
   response?: string       // 兼容字段，指向ai_response
+  
+  // 新增：MCP相关字段
+  has_mcp_result?: boolean    // 是否有MCP结果
+  mcp_reason?: string         // 思考原因
+  mcp_result?: string         // 执行结果
+  mcp_tool_name?: string      // 工具名称
+  mcp_arguments?: Record<string, any>  // 工具参数
+  mcp_success?: boolean       // 执行是否成功
+  mcp_duration?: number       // MCP执行时长
+  mcp_start_timestamp?: string // MCP开始时间
+  mcp_end_timestamp?: string   // MCP结束时间
 }
 
 // 实验日志

@@ -823,34 +823,45 @@ async def get_latest_inference():
 
 @app.get("/api/latest-inference-with-ai", response_model=ApiResponse)
 async def get_latest_inference_with_ai():
-    """获取最新的已完成AI分析的推理结果"""
+    """获取最新的已完成AI分析且有MCP结果的推理结果"""
     try:
-        # 获取所有推理结果
-        inference_results = state.get_latest_inference_results(limit=50)
-        
-        # 筛选出有AI分析结果的推理
-        ai_completed_results = [r for r in inference_results if r.get('has_inference_result', False)]
-        
-        if not ai_completed_results:
+        # 获取媒体历史记录（包含图像和视频）
+        media_response = await get_media_history(limit=50)
+        if not media_response.success or not media_response.data:
             return ApiResponse(
                 success=False,
-                error="没有找到已完成AI分析的推理结果",
+                error="没有找到媒体历史记录",
                 timestamp=time.time()
             )
         
-        # 返回最新的已完成AI分析的推理结果
-        latest_ai_result = ai_completed_results[0]
+        media_items = media_response.data.get('media_items', [])
+        
+        # 筛选出同时有AI分析结果和MCP结果的推理
+        complete_results = [
+            item for item in media_items 
+            if item.get('has_inference_result', False) and item.get('has_mcp_result', False)
+        ]
+        
+        if not complete_results:
+            return ApiResponse(
+                success=False,
+                error="没有找到同时具有AI分析和MCP结果的推理结果",
+                timestamp=time.time()
+            )
+        
+        # 返回最新的完整推理结果
+        latest_complete_result = complete_results[0]
         
         return ApiResponse(
             success=True,
-            data=latest_ai_result,
+            data=latest_complete_result,
             timestamp=time.time()
         )
         
     except Exception as e:
         return ApiResponse(
             success=False,
-            error=f"获取最新AI推理结果失败: {str(e)}",
+            error=f"获取最新完整推理结果失败: {str(e)}",
             timestamp=time.time()
         )
 
@@ -1235,6 +1246,7 @@ async def get_media_history(limit: int = 50):
                         # 图像模式
                         image_details_file = item / 'image_details.json'
                         inference_result_file = item / 'inference_result.json'
+                        mcp_result_file = item / 'mcp_result.json'
                         
                         if image_details_file.exists():
                             with open(image_details_file, 'r', encoding='utf-8') as f:
@@ -1245,6 +1257,10 @@ async def get_media_history(limit: int = 50):
                             if image_files:
                                 image_file = image_files[0]
                                 
+                                # 检查是否同时有inference_result.json和mcp_result.json
+                                has_inference_result = inference_result_file.exists()
+                                has_mcp_result = mcp_result_file.exists()
+                                
                                 media_item = {
                                     'type': 'image',
                                     'media_path': safe_relative_path(image_file),
@@ -1254,13 +1270,14 @@ async def get_media_history(limit: int = 50):
                                     'timestamp_iso': image_details.get('timestamp_iso'),
                                     'relative_timestamp': image_details.get('relative_timestamp'),
                                     'creation_time': image_details.get('creation_time'),
-                                    'has_inference_result': inference_result_file.exists(),
+                                    'has_inference_result': has_inference_result,
+                                    'has_mcp_result': has_mcp_result,
                                     'details_dir': safe_relative_path(item),
                                     'image_dimensions': image_details.get('image_dimensions', {})
                                 }
                                 
                                 # 如果有推理结果，添加推理信息
-                                if inference_result_file.exists():
+                                if has_inference_result:
                                     with open(inference_result_file, 'r', encoding='utf-8') as f:
                                         inference_result = json.load(f)
                                     
@@ -1277,6 +1294,25 @@ async def get_media_history(limit: int = 50):
                                         'user_question': inference_result.get('user_question'),  # 用户问题
                                         'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
                                         'raw_result': inference_result.get('raw_result')  # 原始结果
+                                    })
+                                
+                                # 如果有MCP结果，添加思考与行动信息
+                                if has_mcp_result:
+                                    with open(mcp_result_file, 'r', encoding='utf-8') as f:
+                                        mcp_result = json.load(f)
+                                    
+                                    mcp_data = mcp_result.get('mcp_response_data', {}).get('data', {})
+                                    control_result = mcp_data.get('control_result', {})
+                                    
+                                    media_item.update({
+                                        'mcp_reason': control_result.get('reason', ''),  # 思考原因
+                                        'mcp_result': control_result.get('result', ''),  # 执行结果
+                                        'mcp_tool_name': control_result.get('tool_name', ''),  # 工具名称
+                                        'mcp_arguments': control_result.get('arguments', {}),  # 工具参数
+                                        'mcp_success': control_result.get('success', False),  # 执行是否成功
+                                        'mcp_duration': mcp_result.get('mcp_duration', 0),  # MCP执行时长
+                                        'mcp_start_timestamp': mcp_result.get('mcp_start_timestamp', ''),  # MCP开始时间
+                                        'mcp_end_timestamp': mcp_result.get('mcp_end_timestamp', '')  # MCP结束时间
                                     })
                                 
                                 media_items.append(media_item)
