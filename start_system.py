@@ -29,11 +29,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class SimpleSystemManager:
-    def __init__(self, test_mode: bool = False, backend_client_mode: bool = False, enable_tts: bool = False, enable_asr: bool = False):
+    def __init__(self, test_mode: bool = False, backend_client_mode: bool = False, enable_tts: bool = False, enable_asr: bool = False, enable_mcp_inference: bool = False):
         self.test_mode = test_mode
         self.backend_client_mode = backend_client_mode
         self.enable_tts = enable_tts
         self.enable_asr = enable_asr
+        self.enable_mcp_inference = enable_mcp_inference
         self.processes = {}
         
         # 从配置文件读取TCP端口
@@ -44,6 +45,11 @@ class SimpleSystemManager:
         if self.enable_asr:
             self.asr_port = self._load_asr_port()
             self.ports.append(self.asr_port)
+        
+        # 如果启用MCP推理服务，添加推理服务端口
+        if self.enable_mcp_inference:
+            self.mcp_inference_port = self._load_mcp_inference_port()
+            self.ports.append(self.mcp_inference_port)
         
     def _load_tcp_port(self) -> int:
         """从配置文件加载TCP端口"""
@@ -68,6 +74,18 @@ class SimpleSystemManager:
         except Exception as e:
             logger.warning(f"读取ASR配置失败，使用默认ASR端口8081: {e}")
             return 8081
+    
+    def _load_mcp_inference_port(self) -> int:
+        """从配置文件加载MCP推理服务端口"""
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            mcp_inference_port = config['camera_inference_service']['port']
+            logger.info(f"从配置文件读取MCP推理服务端口: {mcp_inference_port}")
+            return mcp_inference_port
+        except Exception as e:
+            logger.warning(f"读取MCP推理服务配置失败，使用默认MCP推理服务端口8082: {e}")
+            return 8082
     
     def _update_config_for_backend_client(self):
         """更新配置文件以使用后端视频客户端模式"""
@@ -160,6 +178,32 @@ class SimpleSystemManager:
         except Exception as e:
             logger.error(f"更新ASR配置失败: {e}")
             return False
+    
+    def _update_mcp_inference_config(self):
+        """更新MCP推理服务配置"""
+        if not self.enable_mcp_inference:
+            return True
+            
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # 启用MCP推理服务
+            if 'camera_inference_service' not in config:
+                config['camera_inference_service'] = {}
+            config['camera_inference_service']['enabled'] = True
+            config['camera_inference_service']['host'] = '0.0.0.0'
+            config['camera_inference_service']['port'] = self.mcp_inference_port
+            
+            # 保存更新的配置，确保保持原有格式
+            with open('config.json', 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2, separators=(',', ': '))
+            
+            logger.info("✅ 配置文件已更新，MCP推理服务已启用")
+            return True
+        except Exception as e:
+            logger.error(f"更新MCP推理服务配置失败: {e}")
+            return False
         
     def kill_port_processes(self, port: int):
         """杀死占用指定端口的进程"""
@@ -219,6 +263,9 @@ class SimpleSystemManager:
         if self.enable_asr:
             logger.info("🎤 ASR服务已启用")
         
+        if self.enable_mcp_inference:
+            logger.info("🤖 MCP推理服务已启用")
+        
         # 0. 更新配置文件
         if self.backend_client_mode:
             if not self._update_config_for_backend_client():
@@ -235,6 +282,11 @@ class SimpleSystemManager:
         # 更新ASR配置
         if self.enable_asr:
             if not self._update_asr_config():
+                return False
+        
+        # 更新MCP推理服务配置
+        if self.enable_mcp_inference:
+            if not self._update_mcp_inference_config():
                 return False
         
         # 1. 清理端口
@@ -300,7 +352,16 @@ class SimpleSystemManager:
             ):
                 logger.warning("⚠️ ASR服务启动失败，但系统将继续运行")
         
-        # 6. 启动前端服务
+        # 6. 启动MCP推理服务（如果启用）
+        if self.enable_mcp_inference:
+            if not self.start_service(
+                "MCP_inference_service",
+                ['camera-mcp', 'inference_service', '--config', config_path],
+                wait_time=3
+            ):
+                logger.warning("⚠️ MCP推理服务启动失败，但系统将继续运行")
+        
+        # 7. 启动前端服务
         if not self.start_service(
             "Frontend_service",
             ['npm', 'run', 'dev'],
@@ -325,6 +386,9 @@ class SimpleSystemManager:
         
         if self.enable_asr:
             logger.info(f"🎤 ASR服务: 接收语音识别问题，端口 {self.asr_port}")
+        
+        if self.enable_mcp_inference:
+            logger.info(f"🤖 MCP推理服务: 摄像头控制异步推理，端口 {self.mcp_inference_port}")
         
         return True
     
@@ -374,6 +438,8 @@ def main():
                        help='启用TTS服务（语音合成）')
     parser.add_argument('--asr', action='store_true', 
                        help='启用ASR服务（语音识别问题接收）')
+    parser.add_argument('--mcp-inference', action='store_true', 
+                       help='启用MCP推理服务（摄像头控制异步推理）')
     
     args = parser.parse_args()
     
@@ -381,7 +447,8 @@ def main():
         test_mode=args.test, 
         backend_client_mode=args.backend_client,
         enable_tts=args.tts,
-        enable_asr=args.asr
+        enable_asr=args.asr,
+        enable_mcp_inference=getattr(args, 'mcp_inference', False)
     )
     signal_handler.manager = manager
     signal.signal(signal.SIGINT, signal_handler)

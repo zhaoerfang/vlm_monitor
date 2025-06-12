@@ -9,15 +9,56 @@ import json
 import logging
 import os
 import sys
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from openai import AsyncOpenAI
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import AnyUrl
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# 导入提示词生成函数
+from ..prompts.prompt import get_mcp_system_prompt
+
+# 配置日志 - 输出到主项目的 logs 目录
+def setup_logger():
+    """设置日志配置"""
+    # 获取主项目根目录
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    logs_dir = os.path.join(project_root, 'logs')
+    
+    # 确保 logs 目录存在
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # 配置日志
+    log_file = os.path.join(logs_dir, 'mcp_camera_client.log')
+    
+    # 创建 logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    
+    # 避免重复添加 handler
+    if not logger.handlers:
+        # 文件处理器
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # 控制台处理器
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        
+        # 格式化器
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        # 添加处理器
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+    
+    return logger
+
+logger = setup_logger()
 
 
 class CameraClient:
@@ -28,10 +69,10 @@ class CameraClient:
         初始化客户端
         
         Args:
-            config_path: 配置文件路径，默认使用项目根目录的 config.json
+            config_path: 配置文件路径，默认使用主项目根目录的 config.json
         """
         if config_path is None:
-            # 默认使用项目根目录的 config.json
+            # 默认使用主项目根目录的 config.json
             config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))), 'config.json')
         
         self.config = self._load_config(config_path)
@@ -39,13 +80,18 @@ class CameraClient:
         self.mcp_session: Optional[ClientSession] = None
         self.stdio_context = None
         
+        # 缓存工具列表和系统提示词
+        self.available_tools: List[Any] = []
+        self.system_prompt: str = ""
+        self._tools_loaded = False
+        
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """加载配置文件"""
         try:
-            # 如果是相对路径，从项目根目录开始查找
+            # 如果是相对路径，从主项目根目录开始查找
             if not os.path.isabs(config_path):
-                # 获取项目根目录（假设此文件在 mcp/ 目录下）
-                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # 获取主项目根目录（从 mcp/src/camera_mcp/cores/ 向上4级）
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
                 config_path = os.path.join(project_root, config_path)
                 
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -110,6 +156,9 @@ class CameraClient:
             # 初始化连接
             await self.mcp_session.initialize()
             
+            # 加载工具列表和生成系统提示词
+            await self._load_tools_and_prompt()
+            
             logger.info("成功连接到 MCP server")
             return True
             
@@ -126,17 +175,49 @@ class CameraClient:
             if self.stdio_context:
                 await self.stdio_context.__aexit__(None, None, None)
                 self.stdio_context = None
+            
+            # 清空缓存
+            self.available_tools = []
+            self.system_prompt = ""
+            self._tools_loaded = False
+            
             logger.info("已断开与 MCP server 的连接")
         except Exception as e:
             logger.error(f"断开连接时出错: {e}")
     
-    async def list_available_tools(self) -> list:
-        """列出可用的工具"""
+    async def _load_tools_and_prompt(self):
+        """加载工具列表并生成系统提示词"""
         if not self.mcp_session:
             raise RuntimeError("未连接到 MCP server")
         
-        tools = await self.mcp_session.list_tools()
-        return tools.tools if hasattr(tools, 'tools') else []
+        try:
+            # 获取工具列表
+            tools = await self.mcp_session.list_tools()
+            self.available_tools = tools.tools if hasattr(tools, 'tools') else []
+            
+            # 生成工具描述
+            tool_descriptions = []
+            for tool in self.available_tools:
+                tool_descriptions.append(f"  - {tool.name}: {tool.description}")
+            
+            # 生成系统提示词
+            tools_description_text = "\n".join(tool_descriptions)
+            self.system_prompt = get_mcp_system_prompt(tools_description_text)
+            
+            self._tools_loaded = True
+            logger.info(f"已加载 {len(self.available_tools)} 个工具并生成系统提示词")
+            
+        except Exception as e:
+            logger.error(f"加载工具列表失败: {e}")
+            self.available_tools = []
+            self.system_prompt = get_mcp_system_prompt("")
+            self._tools_loaded = False
+    
+    async def list_available_tools(self) -> list:
+        """列出可用的工具"""
+        if not self._tools_loaded:
+            await self._load_tools_and_prompt()
+        return self.available_tools
     
     async def call_camera_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """调用摄像头控制工具"""
@@ -144,22 +225,30 @@ class CameraClient:
             raise RuntimeError("未连接到 MCP server")
         
         try:
+            logger.info(f"🔧 调用摄像头工具: {tool_name}, 参数: {arguments}")
+            
             result = await self.mcp_session.call_tool(tool_name, arguments)
             if hasattr(result, 'content') and result.content:
                 # 提取文本内容
                 if isinstance(result.content, list) and len(result.content) > 0:
                     content_item = result.content[0]
                     if hasattr(content_item, 'text'):
-                        return content_item.text
+                        result_text = content_item.text
                     else:
-                        return str(content_item)
+                        result_text = str(content_item)
                 else:
-                    return str(result.content)
+                    result_text = str(result.content)
+                
+                logger.info(f"✅ 工具调用成功: {tool_name} -> {result_text}")
+                return result_text
             else:
-                return str(result)
+                logger.warning(f"⚠️ 工具调用返回空结果: {tool_name}")
+                return "工具调用成功，但无返回内容"
+                
         except Exception as e:
-            logger.error(f"调用工具 {tool_name} 失败: {e}")
-            return f"调用工具失败: {str(e)}"
+            error_msg = f"工具调用失败: {str(e)}"
+            logger.error(f"❌ {tool_name} 调用失败: {error_msg}")
+            raise RuntimeError(error_msg)
     
     async def get_camera_status(self) -> str:
         """获取摄像头状态"""
@@ -173,79 +262,203 @@ class CameraClient:
             logger.error(f"获取摄像头状态失败: {e}")
             return f"获取状态失败: {str(e)}"
     
-    async def ai_control_camera(self, user_instruction: str) -> str:
+    async def ai_control_camera(self, user_instruction: str) -> Dict[str, Any]:
         """
         使用 AI 智能控制摄像头
         
         Args:
-            user_instruction: 用户指令，如 "向左转动30度"、"拍一张照片"等
-        
-        Returns:
-            执行结果
-        """
-        try:
-            # 获取可用工具列表
-            tools = await self.list_available_tools()
-            tool_descriptions = []
-            for tool in tools:
-                tool_descriptions.append(f"- {tool.name}: {tool.description}")
+            user_instruction: 用户指令
             
-            # 构建 AI 提示词
-            system_prompt = f"""你是一个摄像头控制助手。用户会给你指令，你需要分析指令并调用相应的摄像头控制工具。
-
-可用的摄像头控制工具：
-{chr(10).join(tool_descriptions)}
-
-
-请根据用户指令，返回一个JSON格式的工具调用，格式如下：
-{{
-    "tool_name": "工具名称",
-    "arguments": {{
-        "参数名": "参数值"
-    }}
-}}
-
-如果指令不清楚或无法执行，请返回错误信息。"""
-
+        Returns:
+            包含控制结果的字典，格式：
+            {
+                "success": bool,
+                "tool_name": str,
+                "arguments": dict,
+                "reason": str,
+                "result": str,
+                "ai_response": str
+            }
+        """
+        if not self.mcp_session:
+            error_msg = "未连接到 MCP server"
+            logger.error(f"摄像头控制失败: {error_msg}")
+            return {
+                "success": False,
+                "tool_name": "",
+                "arguments": {},
+                "reason": "",
+                "result": error_msg,
+                "ai_response": ""
+            }
+        
+        try:
+            # 记录用户指令
+            logger.info(f"🎯 收到摄像头控制指令: {user_instruction}")
+            
+            # 构建消息
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_instruction}
+            ]
+            
             # 调用 AI 模型
             mcp_config = self.config.get('mcp_model', {})
-            response = await self.openai_client.chat.completions.create(
+            completion = await self.openai_client.chat.completions.create(
                 model=mcp_config.get('model', 'gpt-4'),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_instruction}
-                ],
+                messages=messages,
                 temperature=mcp_config.get('temperature', 0.1),
                 max_tokens=mcp_config.get('max_tokens', 1000)
             )
             
-            ai_response = response.choices[0].message.content
-            if ai_response:
-                ai_response = ai_response.strip()
-            else:
-                ai_response = ""
-            logger.info(f"AI 响应: {ai_response}")
+            ai_response = completion.choices[0].message.content
+            logger.info(f"🤖 AI 响应: {ai_response}")
             
-            # 尝试解析 JSON 响应
-            try:
-                tool_call = json.loads(ai_response)
-                tool_name = tool_call.get('tool_name')
-                arguments = tool_call.get('arguments', {})
-                
-                if tool_name:
-                    # 调用相应的工具
-                    result = await self.call_camera_tool(tool_name, arguments)
-                    return f"AI 执行结果: {result}"
-                else:
-                    return f"AI 响应格式错误: {ai_response}"
-                    
-            except json.JSONDecodeError:
-                # 如果不是 JSON 格式，可能是错误信息或说明
-                return f"AI 响应: {ai_response}"
-                
+            # 解析 XML 响应并执行工具调用
+            result = await self._parse_xml_response(ai_response)
+            
+            # 记录控制结果
+            if result["success"]:
+                logger.info(f"✅ 摄像头控制成功 - 工具: {result['tool_name']}, 参数: {result['arguments']}, 原因: {result['reason']}")
+                logger.info(f"📋 执行结果: {result['result']}")
+            else:
+                logger.warning(f"⚠️ 摄像头控制失败 - 工具: {result['tool_name']}, 原因: {result['reason']}, 错误: {result['result']}")
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"AI 控制摄像头失败: {e}")
-            return f"AI 控制失败: {str(e)}"
+            error_msg = f"AI 控制摄像头时出错: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "tool_name": "",
+                "arguments": {},
+                "reason": "",
+                "result": error_msg,
+                "ai_response": ""
+            }
+    
+    async def _parse_xml_response(self, ai_response: str) -> Dict[str, Any]:
+        """
+        解析 XML 格式的 AI 响应
+        
+        Args:
+            ai_response: AI 的响应内容
+            
+        Returns:
+            解析结果字典
+        """
+        try:
+            # 检查是否包含 MCP 工具调用标签
+            if "<use_mcp_tool>" in ai_response and "</use_mcp_tool>" in ai_response:
+                # 提取工具调用内容
+                start_tag = "<use_mcp_tool>"
+                end_tag = "</use_mcp_tool>"
+                start_idx = ai_response.find(start_tag) + len(start_tag)
+                end_idx = ai_response.find(end_tag)
+                
+                if start_idx > len(start_tag) - 1 and end_idx > start_idx:
+                    tool_content = ai_response[start_idx:end_idx].strip()
+                    
+                    # 解析工具名称和参数
+                    tool_name = self._extract_xml_content(tool_content, "tool_name")
+                    arguments_str = self._extract_xml_content(tool_content, "arguments")
+                    reason = self._extract_xml_content(tool_content, "reason")
+                    
+                    if tool_name and arguments_str:
+                        try:
+                            # 解析参数
+                            arguments = json.loads(arguments_str)
+                            
+                            # 执行工具调用
+                            result = await self.call_camera_tool(tool_name, arguments)
+                            
+                            logger.info(f"执行摄像头控制: {tool_name}, 参数: {arguments}, 原因: {reason}")
+                            logger.info(f"控制结果: {result}")
+                            
+                            return {
+                                "success": True,
+                                "tool_name": tool_name,
+                                "arguments": arguments,
+                                "reason": reason or "未提供原因",
+                                "result": result,
+                                "ai_response": ai_response
+                            }
+                            
+                        except json.JSONDecodeError as e:
+                            logger.error(f"解析工具参数失败: {e}")
+                            return {
+                                "success": False,
+                                "tool_name": tool_name,
+                                "arguments": {},
+                                "reason": reason or "参数解析失败",
+                                "result": f"参数解析失败: {arguments_str}",
+                                "ai_response": ai_response
+                            }
+                        except Exception as e:
+                            logger.error(f"执行工具调用失败: {e}")
+                            return {
+                                "success": False,
+                                "tool_name": tool_name,
+                                "arguments": arguments,
+                                "reason": reason or "工具调用失败",
+                                "result": f"工具调用失败: {str(e)}",
+                                "ai_response": ai_response
+                            }
+                    else:
+                        return {
+                            "success": False,
+                            "tool_name": tool_name,
+                            "arguments": {},
+                            "reason": "XML解析不完整",
+                            "result": f"工具名称或参数缺失: tool_name={tool_name}, arguments={arguments_str}",
+                            "ai_response": ai_response
+                        }
+            
+            # 没有找到工具调用，可能是纯文本响应
+            return {
+                "success": True,
+                "tool_name": None,
+                "arguments": {},
+                "reason": "无需工具调用",
+                "result": ai_response,
+                "ai_response": ai_response
+            }
+            
+        except Exception as e:
+            logger.error(f"解析 XML 响应失败: {e}")
+            return {
+                "success": False,
+                "tool_name": None,
+                "arguments": {},
+                "reason": "XML解析失败",
+                "result": f"解析失败: {str(e)}",
+                "ai_response": ai_response
+            }
+    
+    def _extract_xml_content(self, text: str, tag: str) -> Optional[str]:
+        """
+        从文本中提取XML标签的内容
+        
+        Args:
+            text: 包含XML标签的文本
+            tag: 要提取的标签名
+            
+        Returns:
+            标签内容，如果未找到则返回None
+        """
+        try:
+            start_tag = f"<{tag}>"
+            end_tag = f"</{tag}>"
+            start_idx = text.find(start_tag)
+            end_idx = text.find(end_tag)
+            
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                return text[start_idx + len(start_tag):end_idx].strip()
+            
+            return None
+        except Exception:
+            return None
     
     async def interactive_mode(self):
         """交互模式"""
@@ -276,7 +489,16 @@ class CameraClient:
                 elif user_input:
                     # AI 智能控制
                     result = await self.ai_control_camera(user_input)
-                    print(f"🤖 {result}")
+                    if result["success"]:
+                        if result["tool_name"]:
+                            print(f"🤖 执行工具: {result['tool_name']}")
+                            print(f"   参数: {result['arguments']}")
+                            print(f"   原因: {result['reason']}")
+                            print(f"   结果: {result['result']}")
+                        else:
+                            print(f"🤖 {result['result']}")
+                    else:
+                        print(f"❌ 执行失败: {result['result']}")
                     
             except KeyboardInterrupt:
                 print("\n👋 再见！")

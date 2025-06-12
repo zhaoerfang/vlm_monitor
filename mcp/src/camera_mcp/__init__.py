@@ -4,6 +4,7 @@ Camera MCP - 基于 Model Context Protocol 的摄像头控制系统
 这个包提供了一个完整的摄像头控制解决方案，包括：
 - MCP Server: 提供摄像头控制工具
 - MCP Client: 支持 AI 智能控制的客户端
+- Camera Inference Service: 异步推理服务，支持图像分析和摄像头控制
 - 工具函数: 摄像头操作的底层实现
 """
 
@@ -32,4 +33,14 @@ def get_client_main():
 def get_camera_client():
     """获取 CameraClient 类"""
     from .cores.camera_client import CameraClient
-    return CameraClient 
+    return CameraClient
+
+def get_camera_inference_service():
+    """获取 CameraInferenceService 类"""
+    from .cores.camera_inference_service import CameraInferenceService
+    return CameraInferenceService
+
+def get_global_camera_inference_service():
+    """获取全局摄像头推理服务实例"""
+    from .cores.camera_inference_service import get_camera_inference_service
+    return get_camera_inference_service 

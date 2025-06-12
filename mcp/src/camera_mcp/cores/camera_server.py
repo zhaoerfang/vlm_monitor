@@ -16,28 +16,47 @@ import os
 # 使用相对导入 Camera 类
 from ..utils.Camera import Camera
 
-# 配置日志 - 写入文件而不是标准输出
-import os
-from datetime import datetime
+# 配置日志 - 输出到主项目的 logs 目录
+def setup_logger():
+    """设置日志配置"""
+    # 获取主项目根目录
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    logs_dir = os.path.join(project_root, 'logs')
+    
+    # 确保 logs 目录存在
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # 配置日志
+    log_file = os.path.join(logs_dir, 'mcp_camera_server.log')
+    
+    # 创建 logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    
+    # 避免重复添加 handler
+    if not logger.handlers:
+        # 文件处理器
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # 控制台处理器（输出到 stderr，避免干扰 MCP 协议）
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setLevel(logging.INFO)
+        
+        # 格式化器
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        # 添加处理器
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+    
+    return logger
 
-# 确保日志目录存在
-log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'logs')
-os.makedirs(log_dir, exist_ok=True)
-
-# 生成日志文件名（包含日期时间）
-log_filename = f"camera_server.log"
-log_filepath = os.path.join(log_dir, log_filename)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_filepath, encoding='utf-8'),  # 写入文件
-        logging.StreamHandler(sys.stderr),
-    ],
-    force=True
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger()
 
 # 创建 FastMCP 实例
 mcp = FastMCP("Camera Control Server")

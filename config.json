@@ -57,7 +57,7 @@
   "mcp_model": {
     "api_key": "sk-88c79b5d716645f39a44b0e5ce2d4541",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "qwen-plus",
+    "model": "qwen-vl-max-2025-04-02",
     "temperature": 0.1,
     "max_tokens": 1000,
     "comment": "MCP摄像头控制系统专用模型配置，用于解析自然语言指令并生成摄像头控制命令"
@@ -94,5 +94,19 @@
     "result_timeout": 180,
     "collection_timeout": 120,
     "comment": "测试相关配置，n_frames_default是进度报告间隔"
+  },
+  "camera_inference_service": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8082,
+    "comment": "摄像头控制异步推理服务配置"
+  },
+  "camera": {
+    "default_ip": "192.168.1.64",
+    "default_admin": "admin",
+    "default_password": "pw4hkcamera",
+    "connection_timeout": 30,
+    "retry_attempts": 3,
+    "comment": "摄像头连接的默认配置"
   }
 }

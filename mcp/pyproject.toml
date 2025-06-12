@@ -33,6 +33,9 @@ dependencies = [
     "requests>=2.25.0",
     "opencv-python>=4.5.0",
     "asyncio-mqtt>=0.11.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +57,7 @@ test = [
 [project.scripts]
 camera-mcp-server = "camera_mcp.cores.camera_server:main"
 camera-mcp-client = "camera_mcp.cores.camera_client:main"
+camera-mcp-inference = "camera_mcp.cores.camera_inference_service:main"
 camera-mcp = "camera_mcp.cli:cli_main"
 
 [project.urls]

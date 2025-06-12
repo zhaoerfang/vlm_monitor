@@ -36,6 +36,7 @@ def create_parser() -> argparse.ArgumentParser:
 示例:
   camera-mcp server              # 启动 MCP Server
   camera-mcp client              # 启动 MCP Client
+  camera-mcp inference_service   # 启动异步MCP推理服务
   camera-mcp test                # 运行系统测试
   camera-mcp --version           # 显示版本信息
         """
@@ -43,7 +44,7 @@ def create_parser() -> argparse.ArgumentParser:
     
     parser.add_argument(
         "command",
-        choices=["server", "client", "test"],
+        choices=["server", "client", "test", "inference_service"],
         help="要执行的命令"
     )
     
@@ -102,6 +103,23 @@ async def run_client(config_path: Optional[str] = None):
         sys.exit(1)
 
 
+async def run_inference_service(config_path: Optional[str] = None):
+    """启动异步MCP推理服务"""
+    print("🤖 启动异步MCP推理服务...")
+    print("正在初始化推理服务...")
+    print("-" * 40)
+    
+    try:
+        from .cores.camera_inference_service import main as inference_main
+        await inference_main()
+    except KeyboardInterrupt:
+        print("\n🛑 推理服务已停止")
+    except Exception as e:
+        print(f"❌ 推理服务启动失败: {e}")
+        print("请确保 MCP Server 正在运行")
+        sys.exit(1)
+
+
 async def run_test(config_path: Optional[str] = None):
     """运行系统测试"""
     print("🧪 运行系统测试...")
@@ -154,7 +172,8 @@ def check_dependencies():
 def check_config(config_path: Optional[str] = None):
     """检查配置文件"""
     if config_path is None:
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
+        # 默认使用主项目根目录的配置文件
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'config.json')
     
     if not os.path.exists(config_path):
         print(f"⚠️ 未找到配置文件: {config_path}")
@@ -174,6 +193,18 @@ def check_config(config_path: Optional[str] = None):
             print("⚠️ 未配置 MCP 模型 API 密钥")
             print("AI 功能将不可用，但基本功能仍可正常使用")
             print("请在配置文件中设置正确的 mcp_model.api_key")
+        
+        # 检查摄像头配置
+        camera_config = config.get('camera', {})
+        if not camera_config:
+            print("⚠️ 未找到摄像头配置")
+            print("请在配置文件中添加 camera 配置项")
+        
+        # 检查推理服务配置
+        inference_config = config.get('camera_inference_service', {})
+        if not inference_config:
+            print("⚠️ 未找到推理服务配置")
+            print("请在配置文件中添加 camera_inference_service 配置项")
         
         return True
         
@@ -207,6 +238,9 @@ def main():
     elif args.command == 'test':
         # 对于异步命令，使用 asyncio.run
         asyncio.run(run_test(args.config))
+    elif args.command == 'inference_service':
+        # 对于异步命令，使用 asyncio.run
+        asyncio.run(run_inference_service(args.config))
 
 
 def cli_main():
