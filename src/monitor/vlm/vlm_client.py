@@ -446,7 +446,7 @@ class DashScopeVLMClient:
             inference_config = config.get('camera_inference_service', {})
             host = inference_config.get('host', 'localhost')
             port = inference_config.get('port', 8082)
-            inference_url = f"http://{host}:{port}/analyze"
+            inference_url = f"http://localhost:{port}/analyze"
             
             logger.info(f"🌐 发送请求到 MCP 推理服务: {inference_url}")
             
@@ -576,11 +576,27 @@ class DashScopeVLMClient:
             # 创建MCP结果文件路径
             mcp_result_file = details_dir / 'mcp_result.json'
             
+            # 增强MCP结果数据，添加更多有用信息
+            enhanced_mcp_result = mcp_result.copy()
+            enhanced_mcp_result.update({
+                'saved_at': time.time(),
+                'saved_timestamp': datetime.now().isoformat(),
+                'frame_details_dir': str(details_dir),
+                'image_filename': image_path_obj.name
+            })
+            
             # 保存MCP结果到文件
             with open(mcp_result_file, 'w', encoding='utf-8') as f:
-                json_module.dump(mcp_result, f, ensure_ascii=False, indent=2, default=str)
+                json_module.dump(enhanced_mcp_result, f, ensure_ascii=False, indent=2, default=str)
             
             logger.info(f"📁 MCP结果已保存到: {mcp_result_file}")
+            
+            # 如果MCP结果包含对话历史信息，记录到日志
+            if 'mcp_response_data' in enhanced_mcp_result:
+                response_data = enhanced_mcp_result['mcp_response_data']
+                if isinstance(response_data, dict) and 'conversation_summary' in response_data:
+                    conv_summary = response_data['conversation_summary']
+                    logger.info(f"📋 对话历史状态: {conv_summary.get('conversation_rounds', 0)} 轮对话，{conv_summary.get('total_messages', 0)} 条消息")
             
         except Exception as e:
             logger.error(f"保存MCP结果失败: {str(e)}")

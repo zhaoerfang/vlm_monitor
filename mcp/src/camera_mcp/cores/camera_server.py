@@ -189,30 +189,29 @@ def pan_tilt_move(pan_angle: float = 0) -> str:
         logger.error(f"摄像头转动失败: {e}")
         return f"摄像头转动失败: {str(e)}"
 
-
-@mcp.tool()
-def capture_image(img_name: str = "") -> str:
-    """
-    摄像头拍照
+# @mcp.tool()
+# def capture_image(img_name: str = "") -> str:
+#     """
+#     摄像头拍照
     
-    Args:
-        img_name: 图片名称，为空则自动生成
+#     Args:
+#         img_name: 图片名称，为空则自动生成
     
-    Returns:
-        拍照结果信息
-    """
-    logger.info(f"🔧 [TOOL] capture_image() 被调用，参数: img_name='{img_name}'")
+#     Returns:
+#         拍照结果信息
+#     """
+#     logger.info(f"🔧 [TOOL] capture_image() 被调用，参数: img_name='{img_name}'")
     
-    try:
-        camera = get_camera()
-        result = camera.catch(img_name=img_name)
-        if result:
-            return f"拍照成功，图片名称: {result}"
-        else:
-            return "拍照失败"
-    except Exception as e:
-        logger.error(f"拍照失败: {e}")
-        return f"拍照失败: {str(e)}"
+#     try:
+#         camera = get_camera()
+#         result = camera.catch(img_name=img_name)
+#         if result:
+#             return f"拍照成功，图片名称: {result}"
+#         else:
+#             return "拍照失败"
+#     except Exception as e:
+#         logger.error(f"拍照失败: {e}")
+#         return f"拍照失败: {str(e)}"
 
 
 @mcp.tool()
@@ -326,25 +325,25 @@ def adjust_image_settings(brightness: int = 50, contrast: int = 50, saturation: 
         return f"调整图像设置失败: {str(e)}"
 
 
-@mcp.resource("camera://status")
-def get_camera_status() -> str:
-    """获取摄像头状态信息"""
-    logger.info(f"🔧 [RESOURCE] get_camera_status() 被调用")
+# @mcp.resource("camera://status")
+# def get_camera_status() -> str:
+#     """获取摄像头状态信息"""
+#     logger.info(f"🔧 [RESOURCE] get_camera_status() 被调用")
     
-    # global camera_instance
-    camera = get_camera()
-    if camera:
-        return json.dumps({
-            "status": "connected",
-            "ip": camera.ip,
-            "admin": camera.admin,
-            "message": "摄像头已连接"
-        }, ensure_ascii=False, indent=2)
-    else:
-        return json.dumps({
-            "status": "disconnected", 
-            "message": "摄像头未连接"
-        }, ensure_ascii=False, indent=2)
+#     # global camera_instance
+#     camera = get_camera()
+#     if camera:
+#         return json.dumps({
+#             "status": "connected",
+#             "ip": camera.ip,
+#             "admin": camera.admin,
+#             "message": "摄像头已连接"
+#         }, ensure_ascii=False, indent=2)
+#     else:
+#         return json.dumps({
+#             "status": "disconnected", 
+#             "message": "摄像头未连接"
+#         }, ensure_ascii=False, indent=2)
 
 
 @mcp.prompt()

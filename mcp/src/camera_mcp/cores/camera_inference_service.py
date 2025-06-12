@@ -74,6 +74,109 @@ class CameraInferenceService:
         self.camera_client = CameraClient(config_path)
         self.is_connected = False
         
+        # 对话历史管理
+        self.conversation_history = []  # 存储对话历史
+        self.max_history_rounds = 4     # 最大保留4轮对话
+        
+    def _add_to_conversation_history(self, ai_analysis: str, control_result: Optional[Dict[str, Any]]):
+        """
+        添加对话到历史记录
+        
+        Args:
+            ai_analysis: AI分析结果（作为assistant角色）
+            control_result: 控制执行结果（作为user角色的反馈）
+        """
+        try:
+            # 添加AI分析作为assistant消息
+            if ai_analysis:
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": ai_analysis
+                })
+            
+            # 添加控制结果作为user消息
+            if control_result and control_result.get('result'):
+                control_feedback = f"控制执行结果: {control_result['result']}"
+                if control_result.get('tool_name'):
+                    control_feedback = f"执行了{control_result['tool_name']}操作，{control_feedback}"
+                
+                self.conversation_history.append({
+                    "role": "user", 
+                    "content": control_feedback
+                })
+            
+            # 保持历史记录在指定轮数内
+            # 每轮对话包含一个assistant消息和一个user消息，所以最大消息数是 max_history_rounds * 2
+            max_messages = self.max_history_rounds * 2
+            if len(self.conversation_history) > max_messages:
+                # 移除最旧的消息，保持偶数个消息（成对的assistant-user）
+                messages_to_remove = len(self.conversation_history) - max_messages
+                # 确保移除偶数个消息，保持对话的完整性
+                if messages_to_remove % 2 != 0:
+                    messages_to_remove += 1
+                self.conversation_history = self.conversation_history[messages_to_remove:]
+            
+            logger.info(f"对话历史已更新，当前包含 {len(self.conversation_history)} 条消息")
+            
+        except Exception as e:
+            logger.error(f"更新对话历史失败: {e}")
+    
+    def _build_messages_with_history(self, base64_image: str, mime_type: str) -> list:
+        """
+        构建包含历史对话的消息列表
+        
+        Args:
+            base64_image: base64编码的图像
+            mime_type: 图像MIME类型
+            
+        Returns:
+            包含历史对话的消息列表
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": self.camera_client.system_prompt
+            }
+        ]
+        
+        # 添加历史对话
+        if self.conversation_history:
+            logger.info(f"添加 {len(self.conversation_history)} 条历史对话到上下文")
+            messages.extend(self.conversation_history)
+        
+        # 添加当前图像分析请求
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{base64_image}"},
+                },
+                {"type": "text", "text": ""},
+            ],
+        })
+        
+        return messages
+    
+    def get_conversation_summary(self) -> Dict[str, Any]:
+        """
+        获取对话历史摘要
+        
+        Returns:
+            对话历史摘要信息
+        """
+        return {
+            "total_messages": len(self.conversation_history),
+            "conversation_rounds": len(self.conversation_history) // 2,
+            "max_rounds": self.max_history_rounds,
+            "recent_messages": self.conversation_history[-4:] if len(self.conversation_history) >= 4 else self.conversation_history
+        }
+    
+    def clear_conversation_history(self):
+        """清空对话历史"""
+        self.conversation_history.clear()
+        logger.info("对话历史已清空")
+        
     async def start_service(self) -> bool:
         """启动服务，连接到 MCP server"""
         try:
@@ -143,23 +246,8 @@ class CameraInferenceService:
             # 编码图像
             base64_image, mime_type = self._encode_image_to_base64(image_path) 
             
-            # 构建消息
-            messages = [
-                {
-                    "role": "system",
-                    "content": self.camera_client.system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{base64_image}"},
-                        },
-                        {"type": "text", "text": ""},
-                    ],
-                }
-            ]
+            # 构建包含历史对话的消息
+            messages = self._build_messages_with_history(base64_image, mime_type)
             
             # 调用 AI 模型
             mcp_config = self.camera_client.config.get('mcp_model', {})
@@ -179,11 +267,15 @@ class CameraInferenceService:
             # 解析响应并执行摄像头控制
             control_result = await self._parse_and_execute_control(ai_response)
             
+            # 更新对话历史
+            self._add_to_conversation_history(ai_response, control_result)
+            
             return {
                 "image_path": image_path,
                 "ai_analysis": ai_response,
                 "control_executed": control_result is not None,
                 "control_result": control_result,
+                "conversation_summary": self.get_conversation_summary(),
                 "timestamp": asyncio.get_event_loop().time()
             }
             
@@ -564,6 +656,81 @@ async def list_tools():
         
     except Exception as e:
         logger.error(f"工具列表查询失败: {e}")
+        return ApiResponse(
+            success=False,
+            error=str(e),
+            timestamp=asyncio.get_event_loop().time()
+        )
+
+
+@app.get("/conversation/history")
+async def get_conversation_history():
+    """获取对话历史"""
+    if not inference_service or not inference_service.is_connected:
+        raise HTTPException(status_code=503, detail="推理服务未连接")
+    
+    try:
+        summary = inference_service.get_conversation_summary()
+        
+        return ApiResponse(
+            success=True,
+            data={
+                "conversation_summary": summary,
+                "full_history": inference_service.conversation_history
+            },
+            timestamp=asyncio.get_event_loop().time()
+        )
+        
+    except Exception as e:
+        logger.error(f"获取对话历史失败: {e}")
+        return ApiResponse(
+            success=False,
+            error=str(e),
+            timestamp=asyncio.get_event_loop().time()
+        )
+
+
+@app.delete("/conversation/history")
+async def clear_conversation_history():
+    """清空对话历史"""
+    if not inference_service or not inference_service.is_connected:
+        raise HTTPException(status_code=503, detail="推理服务未连接")
+    
+    try:
+        inference_service.clear_conversation_history()
+        
+        return ApiResponse(
+            success=True,
+            data={"message": "对话历史已清空"},
+            timestamp=asyncio.get_event_loop().time()
+        )
+        
+    except Exception as e:
+        logger.error(f"清空对话历史失败: {e}")
+        return ApiResponse(
+            success=False,
+            error=str(e),
+            timestamp=asyncio.get_event_loop().time()
+        )
+
+
+@app.get("/conversation/summary")
+async def get_conversation_summary():
+    """获取对话历史摘要"""
+    if not inference_service or not inference_service.is_connected:
+        raise HTTPException(status_code=503, detail="推理服务未连接")
+    
+    try:
+        summary = inference_service.get_conversation_summary()
+        
+        return ApiResponse(
+            success=True,
+            data=summary,
+            timestamp=asyncio.get_event_loop().time()
+        )
+        
+    except Exception as e:
+        logger.error(f"获取对话摘要失败: {e}")
         return ApiResponse(
             success=False,
             error=str(e),
