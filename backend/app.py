@@ -345,7 +345,9 @@ class AppState:
                             "vehicle_count": inference_data.get("parsed_result", {}).get("vehicle_count", 0),
                             "people": inference_data.get("parsed_result", {}).get("people", []),
                             "vehicles": inference_data.get("parsed_result", {}).get("vehicles", []),
-                            "summary": inference_data.get("parsed_result", {}).get("summary", "")
+                            "summary": inference_data.get("parsed_result", {}).get("summary", ""),
+                            "user_question": inference_data.get("user_question"),  # 用户问题
+                            "response": inference_data.get("parsed_result", {}).get("response") or inference_data.get("parsed_result", {}).get("answer")  # AI回答
                         })
                         
                         # 添加到有AI结果的列表
@@ -1271,7 +1273,10 @@ async def get_media_history(limit: int = 50):
                                         'summary': parsed_result.get('summary', ''),
                                         'inference_duration': inference_result.get('inference_duration'),
                                         'inference_start_timestamp': inference_result.get('inference_start_timestamp'),
-                                        'inference_end_timestamp': inference_result.get('inference_end_timestamp')
+                                        'inference_end_timestamp': inference_result.get('inference_end_timestamp'),
+                                        'user_question': inference_result.get('user_question'),  # 用户问题
+                                        'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
+                                        'raw_result': inference_result.get('raw_result')  # 原始结果
                                     })
                                 
                                 media_items.append(media_item)
@@ -1332,7 +1337,10 @@ async def get_media_history(limit: int = 50):
                                         'summary': parsed_result.get('summary', ''),
                                         'inference_duration': inference_result.get('inference_duration'),
                                         'inference_start_timestamp': inference_result.get('inference_start_timestamp'),
-                                        'inference_end_timestamp': inference_result.get('inference_end_timestamp')
+                                        'inference_end_timestamp': inference_result.get('inference_end_timestamp'),
+                                        'user_question': inference_result.get('user_question'),  # 用户问题
+                                        'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
+                                        'raw_result': inference_result.get('raw_result')  # 原始结果
                                     })
                                 
                                 media_items.append(media_item)

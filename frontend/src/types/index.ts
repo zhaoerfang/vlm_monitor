@@ -7,16 +7,16 @@ export interface BoundingBox {
 }
 
 export interface Person {
-  id: number
-  bbox: [number, number, number, number] // [x1, y1, x2, y2] 相对坐标 0-1，左上角和右下角坐标
+  id: string
   activity: string
+  bbox: [number, number, number, number]
 }
 
 export interface Vehicle {
-  id: number
-  bbox: [number, number, number, number] // [x1, y1, x2, y2] 相对坐标 0-1，左上角和右下角坐标
-  type: string // 车辆类型：小轿车、SUV、卡车、公交车、摩托车、自行车等
-  status: string // 状态：行驶、停车、转弯等
+  id: string
+  type: string
+  status: string
+  bbox: [number, number, number, number]
 }
 
 export interface InferenceResult {
@@ -26,6 +26,8 @@ export interface InferenceResult {
   people: Person[]
   vehicles: Vehicle[]
   summary: string
+  video_path?: string
+  creation_time?: string
 }
 
 // 视频信息相关类型
@@ -77,6 +79,11 @@ export interface InferenceLogItem {
   vehicles?: Vehicle[]
   summary?: string
   raw_result?: string
+  
+  // 新增：AI回答相关字段
+  user_question?: string  // 用户问题
+  ai_response?: string    // AI回答（从raw_result中提取）
+  response?: string       // 兼容字段，指向ai_response
 }
 
 // 实验日志

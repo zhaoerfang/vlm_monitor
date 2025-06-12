@@ -270,13 +270,15 @@ class DashScopeVLMClient:
             logger.error(f"异步视频分析失败: {str(e)}")
             return None
     
-    async def analyze_image_async(self, image_path: str, prompt: Optional[str] = None) -> Optional[str]:
+    async def analyze_image_async(self, image_path: str, prompt: Optional[str] = None, 
+                                 user_question: Optional[str] = None) -> Optional[str]:
         """
         异步分析图像内容
         
         Args:
             image_path: 图像文件路径
             prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
+            user_question: 用户问题，如果有则会添加到提示词中
             
         Returns:
             分析结果文本，如果失败返回None
@@ -289,6 +291,8 @@ class DashScopeVLMClient:
                 return None
                 
             logger.info(f"开始异步分析图像: {image_path} ({file_size_mb:.2f}MB)")
+            if user_question:
+                logger.info(f"用户问题: {user_question}")
             
             # 编码图像为base64
             base64_image = self.encode_image(image_path)
@@ -305,6 +309,10 @@ class DashScopeVLMClient:
             # 使用配置文件中的默认提示词
             if prompt is None:
                 prompt = self.user_prompt_template
+            
+            # 如果有用户问题，添加到提示词中，并要求在JSON中包含response字段
+            if user_question:
+                prompt = f"{prompt}\n\n用户问题: {user_question}\n\n请在返回的JSON结构中添加一个'response'字段，用于回答用户的问题。"
             
             # 构建消息 - 图像格式
             messages: List[Dict[str, Any]] = [

@@ -19,6 +19,7 @@ from datetime import datetime
 import logging
 
 from .vlm_client import DashScopeVLMClient, get_image_dimensions, smart_resize
+from .user_question_manager import UserQuestionManager, init_question_manager
 from ..core.config import load_config
 from ..utils.image_utils import smart_resize_frame, validate_frame, get_frame_info
 
@@ -43,9 +44,21 @@ class AsyncVideoProcessor:
         config = load_config()
         video_config = config.get('video_processing', {})
         vlm_config = config.get('vlm', {})
+        asr_config = config.get('asr', {})
         
         # 初始化VLM客户端
         self.vlm_client = vlm_client or DashScopeVLMClient()
+        
+        # 初始化用户问题管理器（如果ASR服务启用）
+        self.question_manager = None
+        if asr_config.get('enabled', False):
+            asr_host = asr_config.get('host', 'localhost')
+            asr_port = asr_config.get('port', 8081)
+            asr_url = f"http://{asr_host}:{asr_port}"
+            self.question_manager = init_question_manager(asr_server_url=asr_url)
+            logger.info(f"用户问题管理器已初始化: {asr_url}")
+        else:
+            logger.info("ASR服务未启用，跳过用户问题管理器初始化")
         
         # 设置临时目录
         self.temp_dir = temp_dir or tempfile.gettempdir()
@@ -128,6 +141,10 @@ class AsyncVideoProcessor:
         self.stop_event.clear()
         self.start_time = time.time()
         
+        # 启动用户问题管理器（如果存在）
+        if self.question_manager:
+            self.question_manager.start()
+        
         # 启动视频写入线程
         self.video_writer_thread = threading.Thread(
             target=self._video_writer_worker,
@@ -156,6 +173,10 @@ class AsyncVideoProcessor:
     def stop(self):
         """停止异步处理"""
         self.stop_event.set()
+        
+        # 停止用户问题管理器（如果存在）
+        if self.question_manager:
+            self.question_manager.stop()
         
         if self.video_writer_thread:
             self.video_writer_thread.join()
@@ -353,8 +374,15 @@ class AsyncVideoProcessor:
             media_type = media_info.get('media_type', 'video')
             media_path = media_info.get('media_path', media_info.get('video_path', media_info.get('image_path')))
             
+            # 获取当前用户问题
+            user_question = None
+            if self.question_manager:
+                user_question = self.question_manager.get_current_question()
+            
             logger.info(f"开始异步VLM推理: {os.path.basename(media_path)} ({media_type})")
             logger.info(f"  - 推理开始时间: {inference_start_timestamp}")
+            if user_question:
+                logger.info(f"  - 用户问题: {user_question}")
             
             if media_type == 'image':
                 logger.info(f"  - 图像帧号: {media_info.get('frame_number', 'N/A')}")
@@ -363,12 +391,13 @@ class AsyncVideoProcessor:
                 # 执行异步图像推理
                 result = await self.vlm_client.analyze_image_async(
                     media_path, 
-                    prompt=None  # 使用配置文件中的默认提示词
+                    prompt=None,  # 使用配置文件中的默认提示词
+                    user_question=user_question
                 )
             else:
                 logger.info(f"  - 源视频时间范围: {media_info.get('start_relative_timestamp', 'N/A'):.2f}s - {media_info.get('end_relative_timestamp', 'N/A'):.2f}s")
                 
-                # 执行异步视频推理
+                # 执行异步视频推理（暂时不支持用户问题，因为视频分析方法还没修改）
                 result = await self.vlm_client.analyze_video_async(
                     media_path, 
                     prompt=None,  # 使用配置文件中的默认提示词
@@ -396,7 +425,9 @@ class AsyncVideoProcessor:
                 'inference_start_timestamp': inference_start_timestamp,
                 'inference_end_timestamp': inference_end_timestamp,
                 'inference_duration': inference_duration,
-                'result_received_at': time.time()
+                'result_received_at': time.time(),
+                'user_question': user_question,  # 添加用户问题
+                'raw_result': result  # 添加原始结果（兼容性）
             }
             
             # 为了向后兼容，保留video_path字段
@@ -411,6 +442,11 @@ class AsyncVideoProcessor:
             
             # 保存推理结果到媒体详情文件夹
             self._save_inference_result_to_details(result_data)
+            
+            # 如果有用户问题且推理成功，清除问题
+            if user_question and result and self.question_manager:
+                self.question_manager.clear_current_question()
+                logger.info(f"推理完成，已清除用户问题: {user_question}")
             
             try:
                 self.result_queue.put(result_data, timeout=1)
@@ -967,7 +1003,8 @@ class AsyncVideoProcessor:
                 'inference_end_timestamp': result_data['inference_end_timestamp'],
                 'inference_duration': result_data['inference_duration'],
                 'result_received_at': result_data['result_received_at'],
-                'raw_result': result_data['result']  # 原始结果字符串
+                'raw_result': result_data['result'],  # 原始结果字符串
+                'user_question': result_data.get('user_question')  # 用户问题
             }
             
             # 尝试解析JSON结果

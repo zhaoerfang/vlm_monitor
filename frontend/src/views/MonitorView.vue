@@ -182,6 +182,30 @@
               <div class="info-panel">
                 <h4>推理详情</h4>
                 
+                <!-- AI回答区域 - 放在最顶部，始终显示 -->
+                <div class="detail-section ai-response-section">
+                  <h5>AI回答</h5>
+                  <div class="ai-response-content">
+                    <div v-if="currentInference.user_question" class="user-question">
+                      <strong>用户问题：</strong>{{ currentInference.user_question }}
+                    </div>
+                    <div v-else class="no-question">
+                      <span class="no-question-text">暂无用户问题</span>
+                    </div>
+                    <div class="ai-answer">
+                      <strong>AI回答：</strong>
+                      <div class="response-text">
+                        <span v-if="currentInference.response || currentInference.ai_response || extractAIResponse(currentInference.raw_result)">
+                          {{ currentInference.response || currentInference.ai_response || extractAIResponse(currentInference.raw_result) }}
+                        </span>
+                        <span v-else class="no-response-text">
+                          暂无AI回答（用户未提问）
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
                 <div class="detail-section">
                   <h5>基本信息</h5>
                   <div class="detail-item">
@@ -863,6 +887,61 @@ function getInferenceTime(inference: any): number | string {
 function getInferenceDuration(inference: any): string {
   const duration = inference.inference_duration || inference.creation_time || 0
   return (Math.round(duration * 100) / 100).toString()
+}
+
+function extractAIResponse(rawResult: string): string {
+  if (!rawResult) return ''
+  
+  // 如果raw_result包含用户问题的回答，尝试提取
+  // 这里可以根据实际的AI回答格式进行调整
+  
+  // 方法1: 如果AI回答在JSON之外的文本中
+  if (rawResult.includes('```json')) {
+    const beforeJson = rawResult.substring(0, rawResult.indexOf('```json')).trim()
+    const afterJson = rawResult.substring(rawResult.lastIndexOf('```') + 3).trim()
+    
+    // 优先返回JSON前的文本（通常是对用户问题的直接回答）
+    if (beforeJson && beforeJson.length > 10) {
+      return beforeJson
+    }
+    
+    // 其次返回JSON后的文本
+    if (afterJson && afterJson.length > 10) {
+      return afterJson
+    }
+  }
+  
+  // 方法2: 如果整个raw_result就是回答文本（没有JSON结构）
+  if (!rawResult.includes('```json') && !rawResult.includes('{') && rawResult.length > 10) {
+    return rawResult.trim()
+  }
+  
+  // 方法3: 尝试从JSON中提取response字段
+  try {
+    let jsonText = rawResult
+    if (rawResult.includes('```json')) {
+      const start = rawResult.indexOf('```json') + 7
+      const end = rawResult.indexOf('```', start)
+      if (end > start) {
+        jsonText = rawResult.substring(start, end).trim()
+      }
+    }
+    
+    const parsed = JSON.parse(jsonText)
+    if (parsed.response) {
+      return parsed.response
+    }
+    if (parsed.answer) {
+      return parsed.answer
+    }
+    if (parsed.user_response) {
+      return parsed.user_response
+    }
+  } catch (e) {
+    // JSON解析失败，忽略
+  }
+  
+  return ''
 }
 
 function getVideoFileName(videoPath: string): string {
@@ -1800,6 +1879,93 @@ function onThumbnailError(event: Event) {
   background: #fef2f2;
   color: #dc2626;
   border: 1px solid #ef4444;
+}
+
+/* AI回答区域样式 */
+.ai-response-section {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 2px solid #0ea5e9;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.1);
+}
+
+.ai-response-section h5 {
+  color: #0369a1;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+
+.ai-response-section h5::before {
+  content: "🤖";
+  margin-right: 8px;
+  font-size: 18px;
+}
+
+.ai-response-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.user-question {
+  background: rgba(255, 255, 255, 0.8);
+  padding: 12px;
+  border-radius: 8px;
+  border-left: 4px solid #f59e0b;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.user-question strong {
+  color: #d97706;
+}
+
+.ai-answer {
+  background: rgba(255, 255, 255, 0.9);
+  padding: 12px;
+  border-radius: 8px;
+  border-left: 4px solid #10b981;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ai-answer strong {
+  color: #059669;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.response-text {
+  color: #374151;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.no-question {
+  background: rgba(255, 255, 255, 0.6);
+  padding: 8px 12px;
+  border-radius: 6px;
+  border-left: 3px solid #94a3b8;
+}
+
+.no-question-text {
+  color: #64748b;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.no-response-text {
+  color: #64748b;
+  font-style: italic;
+  font-size: 13px;
 }
 
 /* 历史记录区域样式 */
