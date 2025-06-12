@@ -115,6 +115,15 @@ class AsyncVideoProcessor:
         # 实验日志
         self.experiment_log = []
         
+        # 哨兵模式状态管理
+        self.sentry_mode_enabled = True  # 默认启用哨兵模式
+        self._sentry_mode_lock = threading.Lock()  # 线程安全锁
+        
+        # 后端API配置（用于获取哨兵模式状态）
+        self.backend_api_url = "http://localhost:8080"  # 默认后端API地址
+        self._last_sentry_mode_check = 0  # 上次检查哨兵模式的时间
+        self._sentry_mode_check_interval = 5.0  # 检查间隔（秒）
+        
         logger.info(f"异步视频处理器初始化:")
         if self.image_mode:
             logger.info(f"  - 🖼️ 图像模式已启用（每帧单独推理）")
@@ -129,6 +138,7 @@ class AsyncVideoProcessor:
         logger.info(f"  - 原始帧率: {self.original_fps}fps")
         logger.info(f"  - 抽帧间隔: 每{self.frames_per_interval:.1f}帧抽1帧")
         logger.info(f"  - 最大并发推理数: {self.max_concurrent_inferences}")
+        logger.info(f"  - 🛡️ 哨兵模式: {'启用' if self.sentry_mode_enabled else '禁用'}")
         if self.enable_frame_resize:
             logger.info(f"  - 帧缩放已启用: 目标尺寸 {self.target_width}x{self.target_height}")
             logger.info(f"    * 最大帧大小: {self.max_frame_size_mb}MB")
@@ -388,11 +398,19 @@ class AsyncVideoProcessor:
                 logger.info(f"  - 图像帧号: {media_info.get('frame_number', 'N/A')}")
                 logger.info(f"  - 图像时间戳: {media_info.get('relative_timestamp', 'N/A'):.2f}s")
                 
+                # 从后端同步哨兵模式状态
+                self._update_sentry_mode_from_backend()
+                
+                # 获取当前哨兵模式状态
+                enable_camera_control = self.get_sentry_mode()
+                logger.info(f"  - 哨兵模式: {'启用' if enable_camera_control else '禁用'}")
+                
                 # 执行异步图像推理
                 result = await self.vlm_client.analyze_image_async(
                     media_path, 
                     prompt=None,  # 使用配置文件中的默认提示词
-                    user_question=user_question
+                    user_question=user_question,
+                    enable_camera_control=enable_camera_control  # 传递哨兵模式状态
                 )
             else:
                 logger.info(f"  - 源视频时间范围: {media_info.get('start_relative_timestamp', 'N/A'):.2f}s - {media_info.get('end_relative_timestamp', 'N/A'):.2f}s")
@@ -1100,3 +1118,93 @@ class AsyncVideoProcessor:
         except Exception as e:
             logger.error(f"保存视频详情失败: {str(e)}")
             return {'video_path': video_path}  # 失败时返回原路径 
+
+    def set_sentry_mode(self, enabled: bool):
+        """
+        设置哨兵模式状态
+        
+        Args:
+            enabled: True启用哨兵模式，False禁用哨兵模式
+        """
+        with self._sentry_mode_lock:
+            old_state = self.sentry_mode_enabled
+            self.sentry_mode_enabled = enabled
+            
+            if old_state != enabled:
+                mode_text = "启用" if enabled else "禁用"
+                logger.info(f"🛡️ 哨兵模式已{mode_text}")
+                
+                # 如果有用户问题管理器，也通知它
+                if self.question_manager:
+                    logger.info(f"通知用户问题管理器：哨兵模式{mode_text}")
+    
+    def get_sentry_mode(self) -> bool:
+        """
+        获取当前哨兵模式状态
+        
+        Returns:
+            bool: True表示启用，False表示禁用
+        """
+        with self._sentry_mode_lock:
+            return self.sentry_mode_enabled
+    
+    def toggle_sentry_mode(self) -> bool:
+        """
+        切换哨兵模式状态
+        
+        Returns:
+            bool: 切换后的状态
+        """
+        with self._sentry_mode_lock:
+            self.sentry_mode_enabled = not self.sentry_mode_enabled
+            mode_text = "启用" if self.sentry_mode_enabled else "禁用"
+            logger.info(f"🛡️ 哨兵模式已{mode_text}")
+            return self.sentry_mode_enabled
+    
+    def _update_sentry_mode_from_backend(self):
+        """
+        从后端API更新哨兵模式状态
+        """
+        try:
+            import requests
+            
+            current_time = time.time()
+            
+            # 检查是否需要更新（避免频繁请求）
+            if current_time - self._last_sentry_mode_check < self._sentry_mode_check_interval:
+                return
+            
+            self._last_sentry_mode_check = current_time
+            
+            # 请求后端API获取哨兵模式状态
+            response = requests.get(
+                f"{self.backend_api_url}/api/sentry-mode",
+                timeout=2.0  # 短超时，避免阻塞推理
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success') and 'data' in data:
+                    new_enabled = data['data'].get('enabled', True)
+                    
+                    with self._sentry_mode_lock:
+                        if self.sentry_mode_enabled != new_enabled:
+                            self.sentry_mode_enabled = new_enabled
+                            mode_text = "启用" if new_enabled else "禁用"
+                            logger.info(f"🛡️ 从后端同步哨兵模式状态: {mode_text}")
+            else:
+                logger.debug(f"获取哨兵模式状态失败: HTTP {response.status_code}")
+                
+        except Exception as e:
+            # 静默处理错误，避免影响推理流程
+            logger.debug(f"更新哨兵模式状态失败: {str(e)}")
+    
+    def set_backend_api_url(self, url: str):
+        """
+        设置后端API URL
+        
+        Args:
+            url: 后端API的URL
+        """
+        self.backend_api_url = url.rstrip('/')
+        logger.info(f"设置后端API URL: {self.backend_api_url}") 

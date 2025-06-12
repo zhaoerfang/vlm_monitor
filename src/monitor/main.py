@@ -352,6 +352,67 @@ class VLMMonitor:
                 self.stream_client.running = False
         
         logger.info(f"✅ 监控已停止，会话数据保存在: {self.session_dir}")
+        logger.info("VLM监控系统已停止")
+
+    def set_sentry_mode(self, enabled: bool) -> bool:
+        """
+        设置哨兵模式状态
+        
+        Args:
+            enabled: True启用哨兵模式，False禁用哨兵模式
+            
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            if self.processor is None:
+                logger.error("异步处理器未初始化，无法设置哨兵模式")
+                return False
+            
+            self.processor.set_sentry_mode(enabled)
+            mode_text = "启用" if enabled else "禁用"
+            logger.info(f"🛡️ 哨兵模式已{mode_text}")
+            return True
+        except Exception as e:
+            logger.error(f"设置哨兵模式失败: {str(e)}")
+            return False
+    
+    def get_sentry_mode(self) -> Optional[bool]:
+        """
+        获取当前哨兵模式状态
+        
+        Returns:
+            Optional[bool]: 哨兵模式状态，None表示获取失败
+        """
+        try:
+            if self.processor is None:
+                logger.error("异步处理器未初始化，无法获取哨兵模式状态")
+                return None
+            
+            return self.processor.get_sentry_mode()
+        except Exception as e:
+            logger.error(f"获取哨兵模式状态失败: {str(e)}")
+            return None
+    
+    def toggle_sentry_mode(self) -> Optional[bool]:
+        """
+        切换哨兵模式状态
+        
+        Returns:
+            Optional[bool]: 切换后的状态，None表示操作失败
+        """
+        try:
+            if self.processor is None:
+                logger.error("异步处理器未初始化，无法切换哨兵模式")
+                return None
+            
+            new_state = self.processor.toggle_sentry_mode()
+            mode_text = "启用" if new_state else "禁用"
+            logger.info(f"🛡️ 哨兵模式已切换为{mode_text}")
+            return new_state
+        except Exception as e:
+            logger.error(f"切换哨兵模式失败: {str(e)}")
+            return None
 
 def signal_handler(signum, frame):
     """信号处理器"""

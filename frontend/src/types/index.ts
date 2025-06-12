@@ -155,4 +155,17 @@ export interface ApiResponse<T = any> {
   data?: T
   error?: string
   timestamp: number
+}
+
+// 哨兵模式相关类型
+export interface SentryModeStatus {
+  enabled: boolean
+  status: string
+}
+
+export interface SentryModeResponse {
+  success: boolean
+  data?: SentryModeStatus & { message?: string }
+  error?: string
+  timestamp: number
 } 

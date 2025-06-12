@@ -128,11 +128,11 @@ class TTSService:
         try:
             # 从parsed_result中直接获取summary
             parsed_result = inference_data.get('parsed_result', {})
-            summary = parsed_result.get('summary', '')
+            response = parsed_result.get('response', '')
             
-            if summary:
-                logger.debug(f"提取到summary: {summary}")
-                return summary
+            if response:
+                logger.debug(f"提取到summary: {response}")
+                return response
             
             # 如果parsed_result中没有，尝试从raw_result中解析
             raw_result = inference_data.get('raw_result', '')
@@ -158,7 +158,7 @@ class TTSService:
             if json_match:
                 json_str = json_match.group(1)
                 result_data = json.loads(json_str)
-                summary = result_data.get('summary', '')
+                summary = result_data.get('response', '')
                 if summary:
                     logger.debug(f"从raw_result提取到summary: {summary}")
                     return summary

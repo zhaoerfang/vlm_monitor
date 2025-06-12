@@ -159,13 +159,17 @@ class DashScopeVLMClient:
             logger.error(f"同步视频分析失败: {str(e)}")
             return None
     
-    def analyze_image(self, image_path: str, prompt: Optional[str] = None) -> Optional[str]:
+    def analyze_image(self, image_path: str, prompt: Optional[str] = None, 
+                     user_question: Optional[str] = None, 
+                     enable_camera_control: bool = True) -> Optional[str]:
         """
         同步分析图像内容
         
         Args:
             image_path: 图像文件路径
             prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
+            user_question: 用户问题，如果有则会添加到提示词中
+            enable_camera_control: 是否启用摄像头控制功能（哨兵模式）
             
         Returns:
             分析结果文本，如果失败返回None
@@ -175,7 +179,9 @@ class DashScopeVLMClient:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(self.analyze_image_async(image_path, prompt))
+                result = loop.run_until_complete(
+                    self.analyze_image_async(image_path, prompt, user_question, enable_camera_control)
+                )
                 return result
             finally:
                 loop.close()
@@ -183,7 +189,9 @@ class DashScopeVLMClient:
             logger.error(f"同步图像分析失败: {str(e)}")
             return None
     
-    def analyze_media(self, media_path: str, prompt: Optional[str] = None, fps: int = 2) -> Optional[str]:
+    def analyze_media(self, media_path: str, prompt: Optional[str] = None, fps: int = 2, 
+                     user_question: Optional[str] = None, 
+                     enable_camera_control: bool = True) -> Optional[str]:
         """
         自动识别并分析媒体文件（视频或图像）
         
@@ -191,6 +199,8 @@ class DashScopeVLMClient:
             media_path: 媒体文件路径
             prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
             fps: 视频帧率（仅对视频有效）
+            user_question: 用户问题，如果有则会添加到提示词中
+            enable_camera_control: 是否启用摄像头控制功能（哨兵模式）
             
         Returns:
             分析结果文本，如果失败返回None
@@ -200,7 +210,7 @@ class DashScopeVLMClient:
             return self.analyze_video(media_path, prompt, fps)
         elif self._is_image_file(media_path):
             logger.info(f"检测到图像文件: {media_path}")
-            return self.analyze_image(media_path, prompt)
+            return self.analyze_image(media_path, prompt, user_question, enable_camera_control)
         else:
             logger.error(f"不支持的文件格式: {media_path}")
             return None

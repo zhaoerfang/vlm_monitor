@@ -254,6 +254,48 @@ class AppState:
         self.mjpeg_clients = []
         self.mjpeg_clients_lock = threading.Lock()
         self.latest_jpeg_frame: Optional[bytes] = None
+        
+        # 哨兵模式状态管理
+        self.sentry_mode_enabled = True  # 默认启用哨兵模式
+        self._sentry_mode_lock = threading.Lock()  # 线程安全锁
+    
+    def set_sentry_mode(self, enabled: bool):
+        """
+        设置哨兵模式状态
+        
+        Args:
+            enabled: True启用哨兵模式，False禁用哨兵模式
+        """
+        with self._sentry_mode_lock:
+            old_state = self.sentry_mode_enabled
+            self.sentry_mode_enabled = enabled
+            
+            if old_state != enabled:
+                mode_text = "启用" if enabled else "禁用"
+                logger.info(f"🛡️ 哨兵模式已{mode_text}")
+    
+    def get_sentry_mode(self) -> bool:
+        """
+        获取当前哨兵模式状态
+        
+        Returns:
+            bool: True表示启用，False表示禁用
+        """
+        with self._sentry_mode_lock:
+            return self.sentry_mode_enabled
+    
+    def toggle_sentry_mode(self) -> bool:
+        """
+        切换哨兵模式状态
+        
+        Returns:
+            bool: 切换后的状态
+        """
+        with self._sentry_mode_lock:
+            self.sentry_mode_enabled = not self.sentry_mode_enabled
+            mode_text = "启用" if self.sentry_mode_enabled else "禁用"
+            logger.info(f"🛡️ 哨兵模式已切换为{mode_text}")
+            return self.sentry_mode_enabled
     
     def _find_latest_session_dir(self):
         """查找最新的实验会话目录"""
@@ -1705,20 +1747,87 @@ async def video_stream():
                     last_frame_time = current_time
                     frame_count = 200  # 重置计数器
     
-    return StreamingResponse(
-        generate_mjpeg_stream(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
-            "Transfer-Encoding": "chunked",  # 启用分块传输
-            "X-Content-Type-Options": "nosniff"  # 防止MIME类型嗅探
-        }
-    )
+    return StreamingResponse(generate_mjpeg_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+# 哨兵模式相关API端点
+@app.get("/api/sentry-mode", response_model=ApiResponse)
+async def get_sentry_mode():
+    """获取哨兵模式状态"""
+    try:
+        enabled = state.get_sentry_mode()
+        return ApiResponse(
+            success=True,
+            data={
+                "enabled": enabled,
+                "status": "启用" if enabled else "禁用"
+            },
+            timestamp=time.time()
+        )
+    except Exception as e:
+        logger.error(f"获取哨兵模式状态失败: {str(e)}")
+        return ApiResponse(
+            success=False,
+            error=f"获取哨兵模式状态失败: {str(e)}",
+            timestamp=time.time()
+        )
+
+@app.post("/api/sentry-mode", response_model=ApiResponse)
+async def set_sentry_mode(request: Request):
+    """设置哨兵模式状态"""
+    try:
+        data = await request.json()
+        enabled = data.get("enabled", True)
+        
+        if not isinstance(enabled, bool):
+            return ApiResponse(
+                success=False,
+                error="enabled参数必须是布尔值",
+                timestamp=time.time()
+            )
+        
+        state.set_sentry_mode(enabled)
+        mode_text = "启用" if enabled else "禁用"
+        
+        return ApiResponse(
+            success=True,
+            data={
+                "enabled": enabled,
+                "status": mode_text,
+                "message": f"哨兵模式已{mode_text}"
+            },
+            timestamp=time.time()
+        )
+    except Exception as e:
+        logger.error(f"设置哨兵模式失败: {str(e)}")
+        return ApiResponse(
+            success=False,
+            error=f"设置哨兵模式失败: {str(e)}",
+            timestamp=time.time()
+        )
+
+@app.post("/api/sentry-mode/toggle", response_model=ApiResponse)
+async def toggle_sentry_mode():
+    """切换哨兵模式状态"""
+    try:
+        new_state = state.toggle_sentry_mode()
+        mode_text = "启用" if new_state else "禁用"
+        
+        return ApiResponse(
+            success=True,
+            data={
+                "enabled": new_state,
+                "status": mode_text,
+                "message": f"哨兵模式已切换为{mode_text}"
+            },
+            timestamp=time.time()
+        )
+    except Exception as e:
+        logger.error(f"切换哨兵模式失败: {str(e)}")
+        return ApiResponse(
+            success=False,
+            error=f"切换哨兵模式失败: {str(e)}",
+            timestamp=time.time()
+        )
 
 if __name__ == "__main__":
     import uvicorn

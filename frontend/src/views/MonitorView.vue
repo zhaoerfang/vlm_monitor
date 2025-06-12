@@ -6,6 +6,14 @@
         <button @click="refreshData" :disabled="isLoading" class="btn btn-primary">
           {{ isLoading ? '刷新中...' : '刷新' }}
         </button>
+        <button 
+          @click="toggleSentryMode" 
+          :disabled="sentryModeLoading"
+          :class="['btn', 'sentry-mode-btn', sentryModeEnabled ? 'btn-success' : 'btn-secondary']"
+        >
+          <span class="sentry-icon">🛡️</span>
+          {{ sentryModeLoading ? '切换中...' : (sentryModeEnabled ? '哨兵模式 ON' : '哨兵模式 OFF') }}
+        </button>
         <button @click="debugVideos" class="btn btn-secondary">调试视频</button>
         <button @click="clearHistory" class="btn btn-warning">清空历史</button>
       </div>
@@ -393,7 +401,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMonitorStore } from '@/stores/monitor'
-import apiService from '@/services/api'
+import apiService, { sentryModeApi } from '@/services/api'
 import websocketService from '@/services/websocket'
 
 const store = useMonitorStore()
@@ -401,6 +409,10 @@ const isLoading = ref(false)
 const inferenceVideo = ref<HTMLVideoElement>()
 const bboxCanvas = ref<HTMLCanvasElement>()
 const liveVideoCanvas = ref<HTMLCanvasElement>()
+
+// 哨兵模式状态
+const sentryModeEnabled = ref(true)
+const sentryModeLoading = ref(false)
 
 // 实时视频流相关状态
 const streamLoaded = ref(false)
@@ -491,6 +503,9 @@ onMounted(async () => {
   
   // 加载初始数据
   await loadMediaHistory()
+  
+  // 加载哨兵模式状态
+  await loadSentryModeStatus()
   
   // 设置自动刷新历史记录的定时器（每10秒刷新一次）
   const historyRefreshInterval = setInterval(async () => {
@@ -870,6 +885,43 @@ async function stopStream() {
   websocketService.stopVideoStream()
   store.setStreamingStatus(false)
   console.log('✅ 视频流停止请求已发送')
+}
+
+// 哨兵模式相关函数
+async function loadSentryModeStatus() {
+  try {
+    const response = await sentryModeApi.getStatus()
+    if (response.success && response.data) {
+      sentryModeEnabled.value = response.data.enabled
+      console.log('🛡️ 哨兵模式状态已加载:', response.data.status)
+    }
+  } catch (error) {
+    console.error('❌ 加载哨兵模式状态失败:', error)
+  }
+}
+
+async function toggleSentryMode() {
+  if (sentryModeLoading.value) return
+  
+  sentryModeLoading.value = true
+  try {
+    const response = await sentryModeApi.toggle()
+    if (response.success && response.data) {
+      sentryModeEnabled.value = response.data.enabled
+      console.log('🛡️ 哨兵模式已切换:', response.data.message)
+      
+      // 可以在这里添加成功提示
+      // showNotification(response.data.message, 'success')
+    } else {
+      console.error('❌ 切换哨兵模式失败:', response.error)
+      // showNotification('切换哨兵模式失败', 'error')
+    }
+  } catch (error) {
+    console.error('❌ 切换哨兵模式失败:', error)
+    // showNotification('切换哨兵模式失败', 'error')
+  } finally {
+    sentryModeLoading.value = false
+  }
 }
 
 function formatTime(timestamp: number | string): string {
@@ -1584,6 +1636,50 @@ function onThumbnailError(event: Event) {
 .header-controls {
   display: flex;
   gap: 8px;
+}
+
+/* 哨兵模式按钮样式 */
+.sentry-mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.sentry-mode-btn.btn-success {
+  background: linear-gradient(135deg, #10b981, #059669);
+  border-color: #059669;
+  color: white;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+}
+
+.sentry-mode-btn.btn-success:hover {
+  background: linear-gradient(135deg, #059669, #047857);
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.4);
+  transform: translateY(-1px);
+}
+
+.sentry-mode-btn.btn-secondary {
+  background: #6b7280;
+  border-color: #6b7280;
+  color: white;
+}
+
+.sentry-mode-btn.btn-secondary:hover {
+  background: #4b5563;
+  border-color: #4b5563;
+}
+
+.sentry-mode-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.sentry-icon {
+  font-size: 16px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
 }
 
 .monitor-main {

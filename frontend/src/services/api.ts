@@ -1,4 +1,4 @@
-import type { ApiResponse, ExperimentLog, InferenceLogItem } from '@/types'
+import type { ApiResponse, ExperimentLog, InferenceLogItem, SentryModeResponse } from '@/types'
 
 // 基础fetch封装
 async function apiRequest<T = any>(url: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
@@ -105,3 +105,26 @@ export const apiService = {
 }
 
 export default apiService 
+
+// 哨兵模式相关API
+export const sentryModeApi = {
+  // 获取哨兵模式状态
+  async getStatus(): Promise<SentryModeResponse> {
+    return apiRequest('/sentry-mode') as Promise<SentryModeResponse>
+  },
+
+  // 设置哨兵模式状态
+  async setStatus(enabled: boolean): Promise<SentryModeResponse> {
+    return apiRequest('/sentry-mode', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }) as Promise<SentryModeResponse>
+  },
+
+  // 切换哨兵模式状态
+  async toggle(): Promise<SentryModeResponse> {
+    return apiRequest('/sentry-mode/toggle', {
+      method: 'POST',
+    }) as Promise<SentryModeResponse>
+  },
+} 
