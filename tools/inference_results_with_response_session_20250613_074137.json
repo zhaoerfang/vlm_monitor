@@ -1,0 +1,14 @@
+[
+  {
+    "session": "session_20250613_074137",
+    "frame": "frame_000875_074302_956_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250613_074137/frame_000875_074302_956_details/inference_result.json",
+    "response": "房间里有一个人。",
+    "user_question": "房间里有几个人",
+    "summary": "一个人在办公室里坐着",
+    "people_count": 1,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T15:19:50Z",
+    "inference_duration": 6.7989397048950195
+  }
+]

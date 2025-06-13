@@ -8,7 +8,8 @@ import requests
 import logging
 import threading
 import time
-from typing import Optional, Dict, Any
+import uuid
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ class UserQuestionManager:
         self.current_question = None
         self.question_timestamp = None
         self.question_lock = threading.Lock()
+        
+        # 问题分配状态管理
+        self.question_assigned = False  # 问题是否已被分配
+        self.assigned_task_id = None    # 分配给哪个任务
+        self.assignment_time = None     # 分配时间
         
         # 运行状态
         self.running = False
@@ -99,6 +105,10 @@ class UserQuestionManager:
                                 new_timestamp != self.question_timestamp):
                                 self.current_question = new_question
                                 self.question_timestamp = new_timestamp
+                                # 重置分配状态
+                                self.question_assigned = False
+                                self.assigned_task_id = None
+                                self.assignment_time = None
                                 logger.info(f"获取到新的用户问题: {new_question}")
                         else:
                             # 没有问题或问题已超时
@@ -106,6 +116,9 @@ class UserQuestionManager:
                                 logger.info("用户问题已清除或超时")
                                 self.current_question = None
                                 self.question_timestamp = None
+                                self.question_assigned = False
+                                self.assigned_task_id = None
+                                self.assignment_time = None
                 else:
                     logger.warning(f"ASR服务器API响应失败: {api_response.get('error', 'Unknown error')}")
             else:
@@ -117,18 +130,93 @@ class UserQuestionManager:
         except Exception as e:
             logger.error(f"获取用户问题时出错: {str(e)}")
     
+    def acquire_question(self) -> Tuple[Optional[str], Optional[str]]:
+        """
+        原子性获取当前用户问题（仅分配给一个任务）
+        
+        Returns:
+            Tuple[question, task_id]: 问题字符串和任务ID，如果没有可用问题则返回(None, None)
+        """
+        with self.question_lock:
+            # 如果没有问题或问题已被分配，返回None
+            if self.current_question is None or self.question_assigned:
+                return None, None
+            
+            # 分配问题给当前任务
+            task_id = str(uuid.uuid4())[:8]  # 生成短任务ID
+            self.question_assigned = True
+            self.assigned_task_id = task_id
+            self.assignment_time = time.time()
+            
+            logger.info(f"问题已分配给任务 {task_id}: {self.current_question}")
+            return self.current_question, task_id
+    
     def get_current_question(self) -> Optional[str]:
         """
-        获取当前用户问题
+        获取当前用户问题（兼容性方法，已废弃）
         
         Returns:
             当前问题字符串，如果没有问题则返回None
+            
+        Warning:
+            此方法已废弃，请使用 acquire_question() 方法
         """
+        logger.warning("get_current_question() 方法已废弃，请使用 acquire_question() 方法")
         with self.question_lock:
             return self.current_question
     
+    def release_question(self, task_id: str, success: bool = True):
+        """
+        释放问题（推理完成后调用）
+        
+        Args:
+            task_id: 任务ID
+            success: 推理是否成功
+        """
+        with self.question_lock:
+            # 检查任务ID是否匹配
+            if self.assigned_task_id != task_id:
+                logger.warning(f"任务ID不匹配: 期望 {self.assigned_task_id}, 实际 {task_id}")
+                return
+            
+            old_question = self.current_question
+            
+            # 如果推理成功，清除问题并通知ASR服务器
+            if success and old_question:
+                try:
+                    # 通知ASR服务器清除问题
+                    response = requests.post(
+                        f"{self.asr_server_url}/question/clear",
+                        timeout=self.timeout
+                    )
+                    
+                    if response.status_code == 200:
+                        api_response = response.json()
+                        
+                        if api_response.get('success', False):
+                            self.current_question = None
+                            self.question_timestamp = None
+                            logger.info(f"任务 {task_id} 推理成功，已清除用户问题: {old_question}")
+                        else:
+                            logger.warning(f"ASR服务器清除问题失败: {api_response.get('error', 'Unknown error')}")
+                    else:
+                        logger.warning(f"清除用户问题失败: HTTP {response.status_code}")
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"清除用户问题时网络错误: {str(e)}")
+                except Exception as e:
+                    logger.error(f"清除用户问题时出错: {str(e)}")
+            else:
+                logger.info(f"任务 {task_id} 推理失败或无问题，保留问题状态")
+            
+            # 重置分配状态
+            self.question_assigned = False
+            self.assigned_task_id = None
+            self.assignment_time = None
+    
     def clear_current_question(self):
-        """清除当前问题（推理完成后调用）"""
+        """清除当前问题（兼容性方法，已废弃）"""
+        logger.warning("clear_current_question() 方法已废弃，请使用 release_question() 方法")
         try:
             # 通知ASR服务器清除问题
             response = requests.post(
@@ -144,6 +232,9 @@ class UserQuestionManager:
                         old_question = self.current_question
                         self.current_question = None
                         self.question_timestamp = None
+                        self.question_assigned = False
+                        self.assigned_task_id = None
+                        self.assignment_time = None
                         if old_question:
                             logger.info(f"已清除用户问题: {old_question}")
                 else:
@@ -161,6 +252,11 @@ class UserQuestionManager:
         with self.question_lock:
             return self.current_question is not None
     
+    def has_available_question(self) -> bool:
+        """检查是否有可用的（未分配的）问题"""
+        with self.question_lock:
+            return self.current_question is not None and not self.question_assigned
+    
     def get_question_info(self) -> Dict[str, Any]:
         """
         获取问题详细信息
@@ -173,6 +269,10 @@ class UserQuestionManager:
                 'has_question': self.current_question is not None,
                 'question': self.current_question,
                 'timestamp': self.question_timestamp,
+                'question_assigned': self.question_assigned,
+                'assigned_task_id': self.assigned_task_id,
+                'assignment_time': self.assignment_time,
+                'assignment_duration': time.time() - self.assignment_time if self.assignment_time else None,
                 'manager_running': self.running
             }
     

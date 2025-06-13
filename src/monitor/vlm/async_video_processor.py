@@ -384,15 +384,17 @@ class AsyncVideoProcessor:
             media_type = media_info.get('media_type', 'video')
             media_path = media_info.get('media_path', media_info.get('video_path', media_info.get('image_path')))
             
-            # 获取当前用户问题
+            # 获取当前用户问题（原子性分配）
             user_question = None
+            task_id = None
             if self.question_manager:
-                user_question = self.question_manager.get_current_question()
+                user_question, task_id = self.question_manager.acquire_question()
             
             logger.info(f"开始异步VLM推理: {os.path.basename(media_path)} ({media_type})")
             logger.info(f"  - 推理开始时间: {inference_start_timestamp}")
-            if user_question:
+            if user_question and task_id:
                 logger.info(f"  - 用户问题: {user_question}")
+                logger.info(f"  - 任务ID: {task_id}")
             
             if media_type == 'image':
                 logger.info(f"  - 图像帧号: {media_info.get('frame_number', 'N/A')}")
@@ -445,6 +447,7 @@ class AsyncVideoProcessor:
                 'inference_duration': inference_duration,
                 'result_received_at': time.time(),
                 'user_question': user_question,  # 添加用户问题
+                'task_id': task_id,  # 添加任务ID
                 'raw_result': result  # 添加原始结果（兼容性）
             }
             
@@ -461,10 +464,14 @@ class AsyncVideoProcessor:
             # 保存推理结果到媒体详情文件夹
             self._save_inference_result_to_details(result_data)
             
-            # 如果有用户问题且推理成功，清除问题
-            if user_question and result and self.question_manager:
-                self.question_manager.clear_current_question()
-                logger.info(f"推理完成，已清除用户问题: {user_question}")
+            # 如果有用户问题，释放问题（无论推理是否成功）
+            if user_question and task_id and self.question_manager:
+                success = result is not None and len(str(result).strip()) > 0
+                self.question_manager.release_question(task_id, success)
+                if success:
+                    logger.info(f"推理成功，任务 {task_id} 已释放用户问题: {user_question}")
+                else:
+                    logger.warning(f"推理失败，任务 {task_id} 已释放用户问题: {user_question}")
             
             try:
                 self.result_queue.put(result_data, timeout=1)
@@ -475,6 +482,11 @@ class AsyncVideoProcessor:
         except Exception as e:
             logger.error(f"异步推理失败: {str(e)}")
             self.total_inferences_completed += 1  # 即使失败也计入完成数
+            
+            # 如果有用户问题，确保释放问题（推理失败）
+            if 'user_question' in locals() and 'task_id' in locals() and user_question and task_id and self.question_manager:
+                self.question_manager.release_question(task_id, success=False)
+                logger.warning(f"推理异常，任务 {task_id} 已释放用户问题: {user_question}")
             
         # 注意：不删除临时文件，保留用于调试
         logger.debug(f"保留媒体文件用于调试: {media_path}")

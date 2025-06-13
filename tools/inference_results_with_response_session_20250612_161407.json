@@ -1,0 +1,74 @@
+[
+  {
+    "session": "session_20250612_161407",
+    "frame": "frame_000950_161515_764_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_161407/frame_000950_161515_764_details/inference_result.json",
+    "response": "穿黑色衣服的人位于画面右侧，靠近屏幕的右侧区域。",
+    "user_question": "帮我找一个穿黑色衣服的人",
+    "summary": "办公室内多人正在使用电脑工作",
+    "people_count": 13,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T07:52:41",
+    "inference_duration": 13.61776089668274
+  },
+  {
+    "session": "session_20250612_161407",
+    "frame": "frame_000975_161517_658_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_161407/frame_000975_161517_658_details/inference_result.json",
+    "response": "穿黑色衣服的人位于画面左下角，正在低头看手机。",
+    "user_question": "帮我找一个穿黑色衣服的人",
+    "summary": "办公室内多人正在使用电脑工作",
+    "people_count": 13,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T07:52:05Z",
+    "inference_duration": 15.355451345443726
+  },
+  {
+    "session": "session_20250612_161407",
+    "frame": "frame_001000_161519_573_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_161407/frame_001000_161519_573_details/inference_result.json",
+    "response": "穿黑色衣服的人位于画面中央偏右位置，正在坐着。",
+    "user_question": "帮我找一个穿黑色衣服的人",
+    "summary": "办公室内有多人坐在工位上工作，环境繁忙。",
+    "people_count": 3,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T07:52:07Z",
+    "inference_duration": 6.390648365020752
+  },
+  {
+    "session": "session_20250612_161407",
+    "frame": "frame_001025_161521_414_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_161407/frame_001025_161521_414_details/inference_result.json",
+    "response": "穿黑色衣服的人位于画面中央偏左位置，正在坐着。",
+    "user_question": "帮我找一个穿黑色衣服的人",
+    "summary": "办公室内，一个人坐在电脑前工作。",
+    "people_count": 1,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T07:32:09Z",
+    "inference_duration": 3.992281436920166
+  },
+  {
+    "session": "session_20250612_161407",
+    "frame": "frame_001050_161523_372_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_161407/frame_001050_161523_372_details/inference_result.json",
+    "response": "穿黑色衣服的人有：ID为1和ID为4的人员。",
+    "user_question": "帮我找一个穿黑色衣服的人",
+    "summary": "办公室内有多人坐在电脑前工作，环境整洁。",
+    "people_count": 4,
+    "vehicle_count": 0,
+    "timestamp": "1978-01-15T07:32:11Z",
+    "inference_duration": 5.388000249862671
+  },
+  {
+    "session": "session_20250612_161407",
+    "frame": "frame_001075_161525_323_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_161407/frame_001075_161525_323_details/inference_result.json",
+    "response": "穿黑色衣服的人有多个，具体位置如下：\n1. 左侧靠前的黑色衣服人员（坐标大致为[61, 54, 92, 86]）\n2. 中间偏后的黑色衣服人员（坐标大致为[212, 59, 268, 86]）",
+    "user_question": "帮我找一个穿黑色衣服的人",
+    "summary": "办公室内有多人坐在电脑前工作",
+    "people_count": 4,
+    "vehicle_count": 0,
+    "timestamp": "1978-01-15T07:32:13",
+    "inference_duration": 6.99641489982605
+  }
+]

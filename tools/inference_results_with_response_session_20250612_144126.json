@@ -1,0 +1,26 @@
+[
+  {
+    "session": "session_20250612_144126",
+    "frame": "frame_000775_144234_531_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_144126/frame_000775_144234_531_details/inference_result.json",
+    "response": "当前画面显示的是一个办公室环境，有多张办公桌和电脑显示器，但没有人在场。",
+    "user_question": "现在画面中有什么？",
+    "summary": "办公室场景，多个办公桌和电脑显示器，无人在场。",
+    "people_count": 0,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T06:19:22Z",
+    "inference_duration": 3.6116538047790527
+  },
+  {
+    "session": "session_20250612_144126",
+    "frame": "frame_000800_144236_693_details",
+    "file_path": "/home/lxt/fze/code/beta/vlm_monitor/tmp/session_20250612_144126/frame_000800_144236_693_details/inference_result.json",
+    "response": "画面中是一个办公室内部场景，有多个办公桌和电脑屏幕，但没有可见的人或车辆。",
+    "user_question": "现在画面中有什么？",
+    "summary": "办公室内部场景，显示多个办公桌和电脑屏幕。",
+    "people_count": 0,
+    "vehicle_count": 0,
+    "timestamp": "1970-01-15T06:19:24Z",
+    "inference_duration": 4.142086744308472
+  }
+]
