@@ -1363,6 +1363,7 @@ async def get_media_history(limit: int = 50):
                         # 视频模式（sampled_video_xxx_details）
                         video_details_file = item / 'video_details.json'
                         inference_result_file = item / 'inference_result.json'
+                        mcp_result_file = item / 'mcp_result.json'
                         
                         if video_details_file.exists():
                             with open(video_details_file, 'r', encoding='utf-8') as f:
@@ -1372,6 +1373,10 @@ async def get_media_history(limit: int = 50):
                             video_files = list(item.glob('*.mp4'))
                             if video_files:
                                 video_file = video_files[0]
+                                
+                                # 检查是否同时有inference_result.json和mcp_result.json
+                                has_inference_result = inference_result_file.exists()
+                                has_mcp_result = mcp_result_file.exists()
                                 
                                 media_item = {
                                     'type': 'video',
@@ -1383,7 +1388,8 @@ async def get_media_history(limit: int = 50):
                                     'creation_time': video_details.get('creation_time'),
                                     'creation_timestamp': video_details.get('creation_timestamp'),
                                     'sampled_frames': video_details.get('sampled_frames', []),
-                                    'has_inference_result': inference_result_file.exists(),
+                                    'has_inference_result': has_inference_result,
+                                    'has_mcp_result': has_mcp_result,
                                     'details_dir': safe_relative_path(item)
                                 }
                                 
@@ -1402,7 +1408,7 @@ async def get_media_history(limit: int = 50):
                                     })
                                 
                                 # 如果有推理结果，添加推理信息
-                                if inference_result_file.exists():
+                                if has_inference_result:
                                     with open(inference_result_file, 'r', encoding='utf-8') as f:
                                         inference_result = json.load(f)
                                     
@@ -1419,6 +1425,25 @@ async def get_media_history(limit: int = 50):
                                         'user_question': inference_result.get('user_question'),  # 用户问题
                                         'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
                                         'raw_result': inference_result.get('raw_result')  # 原始结果
+                                    })
+                                
+                                # 如果有MCP结果，添加思考与行动信息
+                                if has_mcp_result:
+                                    with open(mcp_result_file, 'r', encoding='utf-8') as f:
+                                        mcp_result = json.load(f)
+                                    
+                                    mcp_data = mcp_result.get('mcp_response_data', {}).get('data', {})
+                                    control_result = mcp_data.get('control_result', {})
+                                    
+                                    media_item.update({
+                                        'mcp_reason': control_result.get('reason', ''),  # 思考原因
+                                        'mcp_result': control_result.get('result', ''),  # 执行结果
+                                        'mcp_tool_name': control_result.get('tool_name', ''),  # 工具名称
+                                        'mcp_arguments': control_result.get('arguments', {}),  # 工具参数
+                                        'mcp_success': control_result.get('success', False),  # 执行是否成功
+                                        'mcp_duration': mcp_result.get('mcp_duration', 0),  # MCP执行时长
+                                        'mcp_start_timestamp': mcp_result.get('mcp_start_timestamp', ''),  # MCP开始时间
+                                        'mcp_end_timestamp': mcp_result.get('mcp_end_timestamp', '')  # MCP结束时间
                                     })
                                 
                                 media_items.append(media_item)

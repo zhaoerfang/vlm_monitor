@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>状态显示测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .history-status {
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: center;
+        }
+        .status-badge {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 500;
+        }
+        .status-badge.success {
+            background: #f0f9ff;
+            color: #0369a1;
+            border: 1px solid #0ea5e9;
+        }
+        .status-badge.pending {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #ef4444;
+        }
+        .status-badge.partial {
+            background: #fef3c7;
+            color: #d97706;
+            border: 1px solid #f59e0b;
+        }
+        .status-badge.answered {
+            background: #f0fdf4;
+            color: #16a34a;
+            border: 1px solid #22c55e;
+        }
+        .status-badge.thinking-complete {
+            background: #fef7ff;
+            color: #a855f7;
+            border: 1px solid #c084fc;
+        }
+        .test-case {
+            border: 1px solid #e6e6e6;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+        }
+        .test-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #303133;
+        }
+        .test-data {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>历史记录状态显示测试</h1>
+    
+    <div class="test-container">
+        <h2>测试用例</h2>
+        
+        <div class="test-case">
+            <div class="test-title">1. 完整分析 + MCP思考完成（无用户问题）</div>
+            <div class="test-data">
+                has_inference_result: true, has_mcp_result: true<br>
+                people_count: 10, vehicle_count: 0<br>
+                user_question: null, response: ""<br>
+                mcp_reason: "继续向左转动摄像头", mcp_result: "✅ 摄像头左转30.0度"
+            </div>
+            <div class="history-status" id="test1"></div>
+        </div>
+        
+        <div class="test-case">
+            <div class="test-title">2. 完整分析 + AI回答 + MCP思考完成</div>
+            <div class="test-data">
+                has_inference_result: true, has_mcp_result: true<br>
+                people_count: 1, vehicle_count: 0<br>
+                user_question: "房间里有几个人", response: "房间里有一个人。"<br>
+                mcp_reason: "向右转动摄像头", mcp_result: "✅ 摄像头右转30度"
+            </div>
+            <div class="history-status" id="test2"></div>
+        </div>
+        
+        <div class="test-case">
+            <div class="test-title">3. 有推理结果 + AI回答（无MCP）</div>
+            <div class="test-data">
+                has_inference_result: true, has_mcp_result: false<br>
+                people_count: 5, vehicle_count: 2<br>
+                user_question: "现在画面中有什么？", response: "画面中有5个人和2辆车"<br>
+                mcp_reason: "", mcp_result: ""
+            </div>
+            <div class="history-status" id="test3"></div>
+        </div>
+        
+        <div class="test-case">
+            <div class="test-title">4. 有推理结果（无AI回答，无MCP）</div>
+            <div class="test-data">
+                has_inference_result: true, has_mcp_result: false<br>
+                people_count: 3, vehicle_count: 1<br>
+                user_question: null, response: ""<br>
+                mcp_reason: "", mcp_result: ""
+            </div>
+            <div class="history-status" id="test4"></div>
+        </div>
+        
+        <div class="test-case">
+            <div class="test-title">5. 等待分析</div>
+            <div class="test-data">
+                has_inference_result: false, has_mcp_result: false<br>
+                people_count: 0, vehicle_count: 0<br>
+                user_question: null, response: ""<br>
+                mcp_reason: "", mcp_result: ""
+            </div>
+            <div class="history-status" id="test5"></div>
+        </div>
+        
+        <div class="test-case">
+            <div class="test-title">6. 只有MCP思考完成（无推理结果）</div>
+            <div class="test-data">
+                has_inference_result: false, has_mcp_result: true<br>
+                people_count: 0, vehicle_count: 0<br>
+                user_question: null, response: ""<br>
+                mcp_reason: "检查左侧区域", mcp_result: "✅ 摄像头左转45度"
+            </div>
+            <div class="history-status" id="test6"></div>
+        </div>
+    </div>
+
+    <script>
+        // 模拟前端的判断函数
+        function hasAIResponse(item) {
+            const hasQuestion = item.user_question && item.user_question.trim().length > 0;
+            const hasResponse = (item.response && item.response.trim().length > 0);
+            return hasQuestion && hasResponse;
+        }
+
+        function hasMCPThinking(item) {
+            const hasReason = item.mcp_reason && item.mcp_reason.trim().length > 0;
+            const hasResult = item.mcp_result && item.mcp_result.trim().length > 0;
+            return hasReason && hasResult;
+        }
+
+        function renderStatus(item, containerId) {
+            const container = document.getElementById(containerId);
+            let html = '';
+
+            // 基础分析状态
+            if (item.has_inference_result && item.has_mcp_result) {
+                html += `<span class="status-badge success">✅ ${item.people_count || 0}人 ${item.vehicle_count || 0}车</span>`;
+            } else if (item.has_inference_result && !item.has_mcp_result) {
+                html += `<span class="status-badge partial">🔄 等待行动</span>`;
+            } else if (!item.has_inference_result) {
+                html += `<span class="status-badge pending">⏳ 等待分析</span>`;
+            }
+
+            // AI回答状态
+            if (hasAIResponse(item)) {
+                html += `<span class="status-badge answered">💬 已回答</span>`;
+            }
+
+            // MCP思考完成状态
+            if (hasMCPThinking(item)) {
+                html += `<span class="status-badge thinking-complete">🤔 思考完成</span>`;
+            }
+
+            container.innerHTML = html;
+        }
+
+        // 测试数据
+        const testCases = [
+            {
+                has_inference_result: true,
+                has_mcp_result: true,
+                people_count: 10,
+                vehicle_count: 0,
+                user_question: null,
+                response: "",
+                mcp_reason: "继续向左转动摄像头",
+                mcp_result: "✅ 摄像头左转30.0度"
+            },
+            {
+                has_inference_result: true,
+                has_mcp_result: true,
+                people_count: 1,
+                vehicle_count: 0,
+                user_question: "房间里有几个人",
+                response: "房间里有一个人。",
+                mcp_reason: "向右转动摄像头",
+                mcp_result: "✅ 摄像头右转30度"
+            },
+            {
+                has_inference_result: true,
+                has_mcp_result: false,
+                people_count: 5,
+                vehicle_count: 2,
+                user_question: "现在画面中有什么？",
+                response: "画面中有5个人和2辆车",
+                mcp_reason: "",
+                mcp_result: ""
+            },
+            {
+                has_inference_result: true,
+                has_mcp_result: false,
+                people_count: 3,
+                vehicle_count: 1,
+                user_question: null,
+                response: "",
+                mcp_reason: "",
+                mcp_result: ""
+            },
+            {
+                has_inference_result: false,
+                has_mcp_result: false,
+                people_count: 0,
+                vehicle_count: 0,
+                user_question: null,
+                response: "",
+                mcp_reason: "",
+                mcp_result: ""
+            },
+            {
+                has_inference_result: false,
+                has_mcp_result: true,
+                people_count: 0,
+                vehicle_count: 0,
+                user_question: null,
+                response: "",
+                mcp_reason: "检查左侧区域",
+                mcp_result: "✅ 摄像头左转45度"
+            }
+        ];
+
+        // 渲染所有测试用例
+        testCases.forEach((testCase, index) => {
+            renderStatus(testCase, `test${index + 1}`);
+        });
+    </script>
+</body>
+</html> 

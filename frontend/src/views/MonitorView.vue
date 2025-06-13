@@ -368,13 +368,24 @@
                             {{ formatHistoryTime(item.timestamp || item.creation_timestamp) }}
                           </div>
                           <div class="history-status">
+                            <!-- 基础分析状态 -->
                             <span v-if="item.has_inference_result && item.has_mcp_result" class="status-badge success">
                               ✅ {{ item.people_count || 0 }}人 {{ item.vehicle_count || 0 }}车
                             </span>
                             <span v-else-if="item.has_inference_result && !item.has_mcp_result" class="status-badge partial">
                               🔄 等待行动
                             </span>
-                            <span v-else class="status-badge pending">⏳ 等待分析</span>
+                            <span v-else-if="!item.has_inference_result" class="status-badge pending">⏳ 等待分析</span>
+                            
+                            <!-- AI回答状态 -->
+                            <span v-if="hasAIResponse(item)" class="status-badge answered">
+                              💬 已回答
+                            </span>
+                            
+                            <!-- MCP思考完成状态 -->
+                            <span v-if="hasMCPThinking(item)" class="status-badge thinking-complete">
+                              🤔 思考完成
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -1607,6 +1618,26 @@ function onThumbnailError(event: Event) {
   const target = event.target as HTMLImageElement | HTMLVideoElement
   console.warn('⚠️ 缩略图加载失败:', target.src)
 }
+
+// 判断是否有AI回答
+function hasAIResponse(item: any): boolean {
+  // 检查是否有用户问题和AI回答
+  const hasQuestion = item.user_question && item.user_question.trim().length > 0
+  const hasResponse = (item.response && item.response.trim().length > 0) || 
+                     (item.ai_response && item.ai_response.trim().length > 0) ||
+                     extractAIResponse(item.raw_result || '').trim().length > 0
+  
+  return hasQuestion && hasResponse
+}
+
+// 判断是否有MCP思考完成
+function hasMCPThinking(item: any): boolean {
+  // 检查是否有思考过程和执行行动
+  const hasReason = item.mcp_reason && item.mcp_reason.trim().length > 0
+  const hasResult = item.mcp_result && item.mcp_result.trim().length > 0
+  
+  return hasReason && hasResult
+}
 </script>
 
 <style scoped>
@@ -2277,6 +2308,10 @@ function onThumbnailError(event: Event) {
 
 .history-status {
   margin-top: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
 }
 
 .status-badge {
@@ -2302,6 +2337,18 @@ function onThumbnailError(event: Event) {
   background: #fef3c7;
   color: #d97706;
   border: 1px solid #f59e0b;
+}
+
+.status-badge.answered {
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #22c55e;
+}
+
+.status-badge.thinking-complete {
+  background: #fef7ff;
+  color: #a855f7;
+  border: 1px solid #c084fc;
 }
 
 /* 思考与行动区域样式 */
