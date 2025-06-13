@@ -1,7 +1,7 @@
 <template>
   <div class="monitor-view">
     <header class="monitor-header">
-      <h1>视频监控系统</h1>
+      <h1>智能监控OS</h1>
       <div class="header-controls">
         <button @click="refreshData" :disabled="isLoading" class="btn btn-primary">
           {{ isLoading ? '刷新中...' : '刷新' }}
