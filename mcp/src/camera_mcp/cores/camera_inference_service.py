@@ -94,11 +94,62 @@ class CameraInferenceService:
                     "content": ai_analysis
                 })
             
-            # 添加控制结果作为user消息
+            # 增强控制结果反馈，包含更多状态信息
             if control_result and control_result.get('result'):
-                control_feedback = f"控制执行结果: {control_result['result']}"
+                # 构建增强的控制反馈
+                control_feedback_parts = []
+                
+                # 基本执行结果
                 if control_result.get('tool_name'):
-                    control_feedback = f"执行了{control_result['tool_name']}操作，{control_feedback}"
+                    tool_name = control_result['tool_name']
+                    arguments = control_result.get('arguments', {})
+                    result = control_result['result']
+                    
+                    control_feedback_parts.append(f"执行了{tool_name}操作")
+                    
+                    # 添加具体参数信息
+                    if tool_name == 'pan_tilt_move' and 'pan_angle' in arguments:
+                        angle = arguments['pan_angle']
+                        direction = "右转" if angle > 0 else "左转" if angle < 0 else "停止"
+                        control_feedback_parts.append(f"参数：{direction}{abs(angle)}度")
+                    elif tool_name == 'zoom_control' and 'zoom_level' in arguments:
+                        zoom = arguments['zoom_level']
+                        action = "放大" if zoom > 0 else "缩小" if zoom < 0 else "停止变焦"
+                        duration = arguments.get('duration', 1.0)
+                        control_feedback_parts.append(f"参数：{action}级别{abs(zoom)}，持续{duration}秒")
+                    
+                    control_feedback_parts.append(f"执行结果：{result}")
+                    
+                    # 提取并保留reason中的状态信息
+                    reason = control_result.get('reason', '')
+                    if reason:
+                        # 尝试提取reason中的关键状态信息
+                        if "当前画面状态：" in reason:
+                            try:
+                                state_start = reason.find("当前画面状态：") + len("当前画面状态：")
+                                state_end = reason.find("。", state_start)
+                                if state_end == -1:
+                                    state_end = reason.find("历史状态：", state_start)
+                                if state_end > state_start:
+                                    current_state = reason[state_start:state_end].strip()
+                                    control_feedback_parts.append(f"画面状态：{current_state}")
+                            except:
+                                pass
+                        
+                        if "下一步计划：" in reason:
+                            try:
+                                plan_start = reason.find("下一步计划：") + len("下一步计划：")
+                                plan_end = len(reason)
+                                if plan_end > plan_start:
+                                    next_plan = reason[plan_start:plan_end].strip()
+                                    control_feedback_parts.append(f"计划：{next_plan}")
+                            except:
+                                pass
+                else:
+                    control_feedback_parts.append(f"控制执行结果：{control_result['result']}")
+                
+                # 组合完整的反馈信息
+                control_feedback = "。".join(control_feedback_parts)
                 
                 self.conversation_history.append({
                     "role": "user", 
@@ -145,16 +196,18 @@ class CameraInferenceService:
             messages.extend(self.conversation_history)
         
         # 添加当前图像分析请求
-        messages.append({
+        current_request = {
             "role": "user",
             "content": [
                 {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{base64_image}"},
                 },
-                {"type": "text", "text": ""},
+                {"type": "text", "text": "分析当前画面并根据哨兵模式控制策略决定是否需要调整摄像头。请仔细查看历史对话记录，了解之前的观察状态，避免重复操作。注意严格输出指定格式。"},
             ],
-        })
+        }
+        
+        messages.append(current_request)
         
         return messages
     
@@ -386,7 +439,7 @@ class CameraInferenceService:
         except Exception:
             return None
     
-    async def simple_control(self, user_instruction: str) -> str:
+    async def simple_control(self, user_instruction: str) -> Dict[str, Any]:
         """
         简单的摄像头控制（不涉及图像分析）
         
@@ -394,7 +447,7 @@ class CameraInferenceService:
             user_instruction: 用户指令
             
         Returns:
-            控制结果
+            控制结果字典
         """
         if not self.is_connected:
             raise RuntimeError("服务未启动或未连接到 MCP server")
@@ -563,10 +616,20 @@ async def analyze_image_and_control(request: AnalyzeRequest):
         )
         
         # 记录处理结果
-        if result["control_executed"]:
-            logger.info(f"✅ 图像分析和摄像头控制完成 - 工具: {result['control_result']['tool_name']}")
+        if result.get("control_executed") and result.get("control_result"):
+            control_result = result["control_result"]
+            if isinstance(control_result, dict):
+                tool_name = control_result.get('tool_name', 'unknown')
+                logger.info(f"✅ 图像分析和摄像头控制完成 - 工具: {tool_name}")
+            else:
+                logger.info("✅ 图像分析和摄像头控制完成")
         else:
-            logger.warning(f"⚠️ 摄像头控制失败: {result['control_result']['result']}")
+            control_result = result.get("control_result", {})
+            if isinstance(control_result, dict):
+                error_msg = control_result.get('result', '未知错误')
+            else:
+                error_msg = str(control_result)
+            logger.warning(f"⚠️ 摄像头控制失败: {error_msg}")
         
         return ApiResponse(
             success=True,
@@ -596,10 +659,11 @@ async def control_camera(request: ControlRequest):
         result = await inference_service.simple_control(request.user_instruction)
         
         # 记录控制结果
-        if result["success"]:
-            logger.info(f"✅ 摄像头控制成功 - 工具: {result['tool_name']}, 参数: {result['arguments']}")
+        if isinstance(result, dict) and result.get("success"):
+            logger.info(f"✅ 摄像头控制成功 - 工具: {result.get('tool_name', 'unknown')}, 参数: {result.get('arguments', {})}")
         else:
-            logger.warning(f"⚠️ 摄像头控制失败: {result['result']}")
+            error_msg = result.get('result', str(result)) if isinstance(result, dict) else str(result)
+            logger.warning(f"⚠️ 摄像头控制失败: {error_msg}")
         
         return ApiResponse(
             success=True,
