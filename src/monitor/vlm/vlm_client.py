@@ -339,14 +339,24 @@ class DashScopeVLMClient:
             # 处理MCP控制结果
             mcp_result = None
             if mcp_task is not None and len(results) > 1:
-                mcp_result = results[1]
-                if isinstance(mcp_result, Exception):
-                    logger.error(f"MCP控制失败: {mcp_result}")
+                mcp_result_raw = results[1]
+                if isinstance(mcp_result_raw, Exception):
+                    logger.error(f"MCP控制失败: {mcp_result_raw}")
+                    mcp_result = None
+                elif isinstance(mcp_result_raw, dict):
+                    mcp_result = mcp_result_raw
+                else:
+                    logger.warning(f"MCP控制返回了意外的结果类型: {type(mcp_result_raw)}")
                     mcp_result = None
             
             # 保存MCP结果到对应的frame详情目录
-            if mcp_result:
+            if mcp_result and isinstance(mcp_result, dict):
                 self._save_mcp_result_to_details(image_path, mcp_result)
+            
+            # 确保vlm_result是字符串或None
+            if vlm_result is not None and not isinstance(vlm_result, str):
+                logger.warning(f"VLM分析返回了意外的结果类型: {type(vlm_result)}")
+                vlm_result = None
             
             logger.info(f"✅ 并行任务执行完成，VLM结果长度: {len(vlm_result) if vlm_result else 0} 字符")
             return vlm_result

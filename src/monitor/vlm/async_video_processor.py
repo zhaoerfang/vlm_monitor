@@ -102,6 +102,15 @@ class AsyncVideoProcessor:
         self.inference_loop = None
         self.inference_event_loop = None
         
+        # 🆕 同步推理模式控制
+        self.sync_inference_mode = vlm_config.get('sync_inference_mode', True)  # 从配置读取，默认启用同步推理模式
+        self.current_inference_lock = threading.Lock()  # 推理状态锁
+        self.current_inference_active = False  # 当前是否有推理在进行
+        self.current_inference_details = None  # 当前推理的详细信息
+        self.pending_frame_data = None  # 待处理的最新帧数据
+        self.pending_frame_lock = threading.Lock()  # 待处理帧锁
+        self.last_inference_completion_time = 0  # 上次推理完成时间
+        
         # 统计信息
         self.total_frames_received = 0
         self.total_videos_created = 0
@@ -111,6 +120,10 @@ class AsyncVideoProcessor:
         self.start_time = None
         self.frames_resized = 0
         self.frames_invalid = 0
+        
+        # 🆕 同步模式统计
+        self.frames_skipped_sync_mode = 0  # 同步模式下跳过的帧数
+        self.user_questions_processed = 0  # 处理的用户问题数
         
         # 实验日志
         self.experiment_log = []
@@ -139,6 +152,7 @@ class AsyncVideoProcessor:
         logger.info(f"  - 抽帧间隔: 每{self.frames_per_interval:.1f}帧抽1帧")
         logger.info(f"  - 最大并发推理数: {self.max_concurrent_inferences}")
         logger.info(f"  - 🛡️ 哨兵模式: {'启用' if self.sentry_mode_enabled else '禁用'}")
+        logger.info(f"  - 🔄 同步推理模式: {'启用' if self.sync_inference_mode else '禁用'}")
         if self.enable_frame_resize:
             logger.info(f"  - 帧缩放已启用: 目标尺寸 {self.target_width}x{self.target_height}")
             logger.info(f"    * 最大帧大小: {self.max_frame_size_mb}MB")
@@ -206,9 +220,15 @@ class AsyncVideoProcessor:
         if self.inference_loop:
             self.inference_loop.join(timeout=10)
             
-        logger.info(f"异步视频处理器已停止，总共处理{self.total_frames_received}帧，"
-                   f"生成{self.total_videos_created}个视频片段，"
-                   f"完成{self.total_inferences_completed}/{self.total_inferences_started}个推理")
+        if self.sync_inference_mode:
+            logger.info(f"异步视频处理器已停止（同步推理模式），总共处理{self.total_frames_received}帧，"
+                       f"生成{self.total_videos_created}个视频片段，生成{self.total_images_created}个图像，"
+                       f"完成{self.total_inferences_completed}/{self.total_inferences_started}个推理，"
+                       f"跳过{self.frames_skipped_sync_mode}帧，处理{self.user_questions_processed}个用户问题")
+        else:
+            logger.info(f"异步视频处理器已停止（异步推理模式），总共处理{self.total_frames_received}帧，"
+                       f"生成{self.total_videos_created}个视频片段，生成{self.total_images_created}个图像，"
+                       f"完成{self.total_inferences_completed}/{self.total_inferences_started}个推理")
         
         # 保存并自动排序实验日志
         self._save_and_sort_experiment_log()
@@ -255,17 +275,72 @@ class AsyncVideoProcessor:
                 'was_resized': processed_frame is not frame
             }
             
-            self.frame_queue.put(frame_data, timeout=1)
+            # 🆕 同步推理模式控制逻辑
+            if self.sync_inference_mode:
+                # 检查是否有用户问题（优先级最高）
+                has_user_question = False
+                if self.question_manager:
+                    has_user_question = self.question_manager.has_available_question()
+                
+                # 检查当前推理状态
+                with self.current_inference_lock:
+                    inference_active = self.current_inference_active
+                
+                if has_user_question:
+                    # 用户问题优先，立即处理
+                    logger.info(f"🚨 检测到用户问题，优先处理帧 {frame_data['frame_number']}")
+                    self._add_frame_to_queue(frame_data)
+                    self.user_questions_processed += 1
+                elif not inference_active:
+                    # 没有推理在进行，可以处理新帧
+                    logger.debug(f"✅ 推理空闲，处理帧 {frame_data['frame_number']}")
+                    
+                    # 🔧 修复：检查是否有缓存帧需要先处理
+                    with self.pending_frame_lock:
+                        if self.pending_frame_data is not None:
+                            # 有缓存帧，处理缓存帧，当前帧成为新的缓存帧
+                            pending_frame = self.pending_frame_data
+                            self.pending_frame_data = frame_data  # 当前帧成为新的缓存帧
+                            logger.info(f"🔄 处理缓存帧 {pending_frame['frame_number']}，当前帧 {frame_data['frame_number']} 成为新缓存")
+                            self._add_frame_to_queue(pending_frame)
+                            return  # 当前帧已缓存，不增加total_frames_received
+                        else:
+                            # 没有缓存帧，直接处理当前帧
+                            self._add_frame_to_queue(frame_data)
+                else:
+                    # 有推理在进行，更新待处理帧（保留最新帧）
+                    with self.pending_frame_lock:
+                        if self.pending_frame_data is None:
+                            logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
+                        else:
+                            logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
+                            self.frames_skipped_sync_mode += 1
+                        self.pending_frame_data = frame_data
+                    return  # 不增加total_frames_received，因为帧被缓存而不是处理
+            else:
+                # 异步模式，直接添加到队列
+                self._add_frame_to_queue(frame_data)
+            
             self.total_frames_received += 1
             
             if self.total_frames_received % 50 == 0:
-                logger.info(f"已接收 {self.total_frames_received} 帧 "
-                          f"(缩放: {self.frames_resized}, 无效: {self.frames_invalid})")
+                if self.sync_inference_mode:
+                    logger.info(f"已接收 {self.total_frames_received} 帧 "
+                              f"(缩放: {self.frames_resized}, 无效: {self.frames_invalid}, "
+                              f"同步跳过: {self.frames_skipped_sync_mode}, 用户问题: {self.user_questions_processed})")
+                else:
+                    logger.info(f"已接收 {self.total_frames_received} 帧 "
+                              f"(缩放: {self.frames_resized}, 无效: {self.frames_invalid})")
                 
-        except queue.Full:
-            logger.warning("帧队列已满，丢弃帧")
         except Exception as e:
             logger.error(f"添加帧失败: {str(e)}")
+    
+    def _add_frame_to_queue(self, frame_data: Dict):
+        """将帧数据添加到处理队列"""
+        try:
+            self.frame_queue.put(frame_data, timeout=1)
+        except queue.Full:
+            logger.warning("帧队列已满，丢弃帧")
 
     def get_result(self, timeout: float = 1.0) -> Optional[Dict]:
         """获取推理结果"""
@@ -348,6 +423,22 @@ class AsyncVideoProcessor:
         """提交异步推理任务"""
         if self.inference_event_loop and not self.inference_event_loop.is_closed() and len(self.active_inference_tasks) < self.max_concurrent_inferences:
             try:
+                # 🆕 同步推理模式：设置推理状态
+                if self.sync_inference_mode:
+                    with self.current_inference_lock:
+                        if self.current_inference_active:
+                            logger.warning("同步推理模式下尝试提交新任务，但当前已有推理在进行")
+                            return
+                        self.current_inference_active = True
+                        self.current_inference_details = {
+                            'media_path': media_info.get('media_path', media_info.get('video_path', media_info.get('image_path', 'unknown'))),
+                            'media_type': media_info.get('media_type', 'video'),
+                            'start_time': time.time(),
+                            'frame_number': media_info.get('frame_number', 'N/A')
+                        }
+                        logger.info(f"🔄 同步推理开始: {os.path.basename(self.current_inference_details['media_path'])} "
+                                  f"(帧号: {self.current_inference_details['frame_number']})")
+                
                 task = asyncio.run_coroutine_threadsafe(
                     self._inference_worker_async(media_info),
                     self.inference_event_loop
@@ -359,18 +450,25 @@ class AsyncVideoProcessor:
                 media_path = media_info.get('media_path', media_info.get('video_path', media_info.get('image_path', 'unknown')))
                 media_type = media_info.get('media_type', 'video')
                 
-                logger.info(f"提交异步推理任务: {os.path.basename(media_path)} ({media_type})")
-                logger.info(f"  - 当前并发数: {len(self.active_inference_tasks)}/{self.max_concurrent_inferences}")
-                logger.info(f"  - 总启动数: {self.total_inferences_started}")
+                if not self.sync_inference_mode:  # 异步模式才打印详细信息
+                    logger.info(f"提交异步推理任务: {os.path.basename(media_path)} ({media_type})")
+                    logger.info(f"  - 当前并发数: {len(self.active_inference_tasks)}/{self.max_concurrent_inferences}")
+                    logger.info(f"  - 总启动数: {self.total_inferences_started}")
             except Exception as e:
                 logger.error(f"提交推理任务失败: {str(e)}")
+                # 🆕 同步推理模式：出错时重置状态
+                if self.sync_inference_mode:
+                    with self.current_inference_lock:
+                        self.current_inference_active = False
+                        self.current_inference_details = None
         else:
             if self.inference_event_loop is None:
                 logger.warning("事件循环未就绪，跳过推理")
             elif self.inference_event_loop.is_closed():
                 logger.warning("事件循环已关闭，跳过推理")
             elif len(self.active_inference_tasks) >= self.max_concurrent_inferences:
-                logger.warning(f"推理任务队列已满 ({len(self.active_inference_tasks)}/{self.max_concurrent_inferences})，跳过推理")
+                if not self.sync_inference_mode:  # 异步模式才警告
+                    logger.warning(f"推理任务队列已满 ({len(self.active_inference_tasks)}/{self.max_concurrent_inferences})，跳过推理")
             else:
                 logger.warning("推理任务提交失败，原因未知")
 
@@ -487,9 +585,37 @@ class AsyncVideoProcessor:
             if 'user_question' in locals() and 'task_id' in locals() and user_question and task_id and self.question_manager:
                 self.question_manager.release_question(task_id, success=False)
                 logger.warning(f"推理异常，任务 {task_id} 已释放用户问题: {user_question}")
+        
+        finally:
+            # 🆕 同步推理模式：推理完成后的处理
+            if self.sync_inference_mode:
+                with self.current_inference_lock:
+                    if self.current_inference_active and self.current_inference_details:
+                        inference_duration = time.time() - self.current_inference_details['start_time']
+                        logger.info(f"✅ 同步推理完成: {os.path.basename(self.current_inference_details['media_path'])} "
+                                  f"(帧号: {self.current_inference_details['frame_number']}, 耗时: {inference_duration:.2f}s)")
+                        
+                        self.current_inference_active = False
+                        self.current_inference_details = None
+                        self.last_inference_completion_time = time.time()
+                
+                # 🔧 修复：不再调用_process_pending_frame，避免处理过时的缓存帧
+                # 让add_frame方法中的新帧检测到推理空闲后自然处理最新帧
+                logger.debug("🔄 同步推理完成，等待新的实时帧...")
             
         # 注意：不删除临时文件，保留用于调试
         logger.debug(f"保留媒体文件用于调试: {media_path}")
+
+    def _process_pending_frame(self):
+        """
+        处理待处理的帧（同步推理模式）
+        
+        ⚠️ 已废弃：此方法存在时序竞争问题，会导致处理过时的缓存帧
+        现在改为让add_frame方法直接处理最新的实时帧
+        """
+        logger.warning("⚠️ _process_pending_frame方法已废弃，不应被调用")
+        # 保留方法体以避免破坏现有调用，但不执行任何操作
+        pass
 
     def _sample_frames_by_time(self, frames_data: List[Dict]) -> List[Dict]:
         """
@@ -1219,4 +1345,75 @@ class AsyncVideoProcessor:
             url: 后端API的URL
         """
         self.backend_api_url = url.rstrip('/')
-        logger.info(f"设置后端API URL: {self.backend_api_url}") 
+        logger.info(f"设置后端API URL: {self.backend_api_url}")
+    
+    def set_sync_inference_mode(self, enabled: bool):
+        """
+        设置同步推理模式
+        
+        Args:
+            enabled: True启用同步推理模式，False禁用（使用异步模式）
+        """
+        with self.current_inference_lock:
+            old_mode = self.sync_inference_mode
+            self.sync_inference_mode = enabled
+            
+            if old_mode != enabled:
+                mode_text = "同步" if enabled else "异步"
+                logger.info(f"🔄 推理模式已切换为: {mode_text}模式")
+                
+                # 如果切换到异步模式，清理同步模式状态
+                if not enabled:
+                    self.current_inference_active = False
+                    self.current_inference_details = None
+                    with self.pending_frame_lock:
+                        if self.pending_frame_data:
+                            logger.info("切换到异步模式，处理待处理帧")
+                            try:
+                                self.frame_queue.put(self.pending_frame_data, timeout=1)
+                            except queue.Full:
+                                logger.warning("帧队列已满，丢弃待处理帧")
+                            self.pending_frame_data = None
+    
+    def get_sync_inference_mode(self) -> bool:
+        """
+        获取当前推理模式
+        
+        Returns:
+            bool: True表示同步模式，False表示异步模式
+        """
+        return self.sync_inference_mode
+    
+    def get_inference_status(self) -> Dict[str, Any]:
+        """
+        获取推理状态信息
+        
+        Returns:
+            包含推理状态的字典
+        """
+        with self.current_inference_lock:
+            status = {
+                'sync_mode': self.sync_inference_mode,
+                'inference_active': self.current_inference_active,
+                'active_tasks': len(self.active_inference_tasks),
+                'max_concurrent': self.max_concurrent_inferences,
+                'total_started': self.total_inferences_started,
+                'total_completed': self.total_inferences_completed,
+                'frames_skipped_sync': self.frames_skipped_sync_mode,
+                'user_questions_processed': self.user_questions_processed
+            }
+            
+            if self.current_inference_details:
+                status['current_inference'] = {
+                    'media_path': self.current_inference_details['media_path'],
+                    'media_type': self.current_inference_details['media_type'],
+                    'frame_number': self.current_inference_details['frame_number'],
+                    'duration': time.time() - self.current_inference_details['start_time']
+                }
+        
+        with self.pending_frame_lock:
+            status['has_pending_frame'] = self.pending_frame_data is not None
+            if self.pending_frame_data:
+                status['pending_frame_number'] = self.pending_frame_data['frame_number']
+        
+        return status 
