@@ -105,10 +105,11 @@ class UserQuestionManager:
                                 new_timestamp != self.question_timestamp):
                                 self.current_question = new_question
                                 self.question_timestamp = new_timestamp
-                                # 重置分配状态
-                                self.question_assigned = False
-                                self.assigned_task_id = None
-                                self.assignment_time = None
+                                # 🔧 修复竞争条件：预先分配问题，避免多个帧同时被认为有用户问题
+                                # 生成预分配的任务ID，但标记为未真正分配
+                                self.question_assigned = True  # 立即标记为已分配，防止竞争
+                                self.assigned_task_id = "pending"  # 使用特殊标记表示预分配状态
+                                self.assignment_time = time.time()
                                 logger.info(f"获取到新的用户问题: {new_question}")
                         else:
                             # 没有问题或问题已超时
@@ -138,18 +139,32 @@ class UserQuestionManager:
             Tuple[question, task_id]: 问题字符串和任务ID，如果没有可用问题则返回(None, None)
         """
         with self.question_lock:
-            # 如果没有问题或问题已被分配，返回None
-            if self.current_question is None or self.question_assigned:
+            # 如果没有问题，返回None
+            if self.current_question is None:
                 return None, None
             
-            # 分配问题给当前任务
-            task_id = str(uuid.uuid4())[:8]  # 生成短任务ID
-            self.question_assigned = True
-            self.assigned_task_id = task_id
-            self.assignment_time = time.time()
-            
-            logger.info(f"问题已分配给任务 {task_id}: {self.current_question}")
-            return self.current_question, task_id
+            # 🔧 修复竞争条件：检查是否是预分配状态
+            if self.question_assigned and self.assigned_task_id == "pending":
+                # 这是预分配状态，现在真正分配给当前任务
+                task_id = str(uuid.uuid4())[:8]  # 生成真实任务ID
+                self.assigned_task_id = task_id
+                self.assignment_time = time.time()  # 更新分配时间
+                
+                logger.info(f"问题已分配给任务 {task_id}: {self.current_question}")
+                return self.current_question, task_id
+            elif self.question_assigned and self.assigned_task_id != "pending":
+                # 问题已被其他任务分配，返回None
+                return None, None
+            else:
+                # 这种情况不应该发生（question_assigned=False但有问题），为了兼容性处理
+                logger.warning("检测到异常状态：有问题但未预分配，进行紧急分配")
+                task_id = str(uuid.uuid4())[:8]
+                self.question_assigned = True
+                self.assigned_task_id = task_id
+                self.assignment_time = time.time()
+                
+                logger.info(f"紧急分配问题给任务 {task_id}: {self.current_question}")
+                return self.current_question, task_id
     
     def get_current_question(self) -> Optional[str]:
         """
@@ -255,7 +270,9 @@ class UserQuestionManager:
     def has_available_question(self) -> bool:
         """检查是否有可用的（未分配的）问题"""
         with self.question_lock:
-            return self.current_question is not None and not self.question_assigned
+            # 🔧 修复竞争条件：预分配状态也算作不可用
+            return (self.current_question is not None and 
+                    not self.question_assigned)
     
     def get_question_info(self) -> Dict[str, Any]:
         """

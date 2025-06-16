@@ -308,14 +308,14 @@ class AsyncVideoProcessor:
                             # 没有缓存帧，直接处理当前帧
                             self._add_frame_to_queue(frame_data)
                 else:
-                    # 有推理在进行，更新待处理帧（保留最新帧）
-                    with self.pending_frame_lock:
-                        if self.pending_frame_data is None:
-                            logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
-                        else:
-                            logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
-                            self.frames_skipped_sync_mode += 1
-                        self.pending_frame_data = frame_data
+                    # # 有推理在进行，更新待处理帧（保留最新帧）
+                    # with self.pending_frame_lock:
+                    #     if self.pending_frame_data is None:
+                    #         logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
+                    #     else:
+                    #         logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
+                    #         self.frames_skipped_sync_mode += 1
+                    #     self.pending_frame_data = frame_data
                     return  # 不增加total_frames_received，因为帧被缓存而不是处理
             else:
                 # 异步模式，直接添加到队列
@@ -323,7 +323,14 @@ class AsyncVideoProcessor:
             
             self.total_frames_received += 1
             
-            if self.total_frames_received % 50 == 0:
+            if self.total_frames_received % 50 == 0:                    # # 有推理在进行，更新待处理帧（保留最新帧）
+                    # with self.pending_frame_lock:
+                    #     if self.pending_frame_data is None:
+                    #         logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
+                    #     else:
+                    #         logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
+                    #         self.frames_skipped_sync_mode += 1
+                    #     self.pending_frame_data = frame_data
                 if self.sync_inference_mode:
                     logger.info(f"已接收 {self.total_frames_received} 帧 "
                               f"(缩放: {self.frames_resized}, 无效: {self.frames_invalid}, "

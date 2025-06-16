@@ -74,9 +74,10 @@ def test_question_assignment():
     with question_manager.question_lock:
         question_manager.current_question = "帮我找一个穿黑色衣服的人"
         question_manager.question_timestamp = time.time()
-        question_manager.question_assigned = False
-        question_manager.assigned_task_id = None
-        question_manager.assignment_time = None
+        # 🔧 适应新的预分配逻辑：模拟预分配状态
+        question_manager.question_assigned = True
+        question_manager.assigned_task_id = "pending"
+        question_manager.assignment_time = time.time()
     
     logger.info(f"设置测试问题: {question_manager.current_question}")
     
@@ -89,9 +90,10 @@ def test_question_assignment():
     with question_manager.question_lock:
         question_manager.current_question = "帮我找一个穿红色衣服的人"
         question_manager.question_timestamp = time.time()
-        question_manager.question_assigned = False
-        question_manager.assigned_task_id = None
-        question_manager.assignment_time = None
+        # 🔧 适应新的预分配逻辑：模拟预分配状态
+        question_manager.question_assigned = True
+        question_manager.assigned_task_id = "pending"
+        question_manager.assignment_time = time.time()
     
     # 测试2: 多个并发任务竞争问题
     logger.info("\n--- 测试2: 多个并发任务竞争问题 ---")
