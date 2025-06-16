@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+import hashlib
 
 # 配置日志
 logging.basicConfig(
@@ -251,10 +252,16 @@ class TTSService:
     def _get_user_question_result_id(self, frame_dir: Path, user_question_data: Dict[Any, Any]) -> str:
         """生成用户问题结果的唯一ID"""
         try:
-            # 使用frame目录名和时间戳作为唯一标识
+            # 🔧 修复：使用frame目录名和用户问题内容的hash作为唯一标识，而不是时间戳
+            # 这样即使文件被重新写入，只要内容相同，ID就不会变化
             frame_name = frame_dir.name
-            timestamp = user_question_data.get('timestamp', 0)
-            return f"{frame_name}_user_question_{timestamp}"
+            user_question = user_question_data.get('user_question', '')
+            response = user_question_data.get('response', '')
+            
+            # 使用问题和回答的组合生成稳定的hash
+            content_hash = hashlib.md5(f"{user_question}_{response}".encode('utf-8')).hexdigest()[:8]
+            
+            return f"{frame_name}_user_question_{content_hash}"
         except Exception as e:
             logger.error(f"生成用户问题结果ID失败: {e}")
             return f"{frame_dir.name}_user_question_{time.time()}"
@@ -296,7 +303,9 @@ class TTSService:
                             new_results_count += 1
                             logger.info(f"成功处理用户问题结果: {frame_dir.name}")
                         else:
-                            logger.warning(f"TTS发送失败，用户问题结果ID: {user_question_id}")
+                            # 🔧 修复：即使TTS发送失败也标记为已处理，避免无限重试
+                            self.processed_results.add(user_question_id)
+                            logger.warning(f"TTS发送失败，用户问题结果ID: {user_question_id}，已标记为已处理避免重试")
                     else:
                         # 即使没有response也标记为已处理，避免重复处理
                         self.processed_results.add(user_question_id)
@@ -327,7 +336,9 @@ class TTSService:
                         new_results_count += 1
                         logger.info(f"成功处理推理结果: {frame_dir.name}")
                     else:
-                        logger.warning(f"TTS发送失败，结果ID: {result_id}")
+                        # 🔧 修复：即使TTS发送失败也标记为已处理，避免无限重试
+                        self.processed_results.add(result_id)
+                        logger.warning(f"TTS发送失败，结果ID: {result_id}，已标记为已处理避免重试")
                 else:
                     # 即使没有summary也标记为已处理，避免重复处理
                     self.processed_results.add(result_id)

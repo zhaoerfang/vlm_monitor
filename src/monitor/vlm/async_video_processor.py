@@ -285,10 +285,13 @@ class AsyncVideoProcessor:
                     logger.debug(f"帧已缩放: {frame_info['resolution']} -> {new_info['resolution']}, "
                                f"{frame_info['size_mb']:.2f}MB -> {new_info['size_mb']:.2f}MB")
             
+            # 🔧 修复帧号计数：先增加计数器，确保每个帧都有唯一帧号
+            self.total_frames_received += 1
+            
             frame_data = {
                 'frame': processed_frame,
                 'timestamp': timestamp or time.time(),
-                'frame_number': self.total_frames_received + 1,
+                'frame_number': self.total_frames_received,  # 使用已增加的计数器
                 'relative_timestamp': (timestamp or time.time()) - (self.start_time or time.time()),
                 'original_info': frame_info,
                 'processed_info': get_frame_info(processed_frame) if processed_frame is not frame else frame_info,
@@ -326,7 +329,7 @@ class AsyncVideoProcessor:
                             logger.info(f"🚨 使用缓存帧 {pending_frame['frame_number']} 处理用户问题，当前帧 {frame_data['frame_number']} 成为新缓存")
                             self._add_frame_to_queue(pending_frame)
                             self.user_questions_processed += 1
-                            return  # 当前帧已缓存，不增加total_frames_received
+                            return  # 当前帧已缓存，已增加total_frames_received
                         else:
                             # 没有缓存帧，直接使用当前帧处理用户问题
                             self._add_frame_to_queue(frame_data)
@@ -343,7 +346,7 @@ class AsyncVideoProcessor:
                             self.pending_frame_data = frame_data  # 当前帧成为新的缓存帧
                             logger.info(f"🔄 处理缓存帧 {pending_frame['frame_number']}，当前帧 {frame_data['frame_number']} 成为新缓存")
                             self._add_frame_to_queue(pending_frame)
-                            return  # 当前帧已缓存，不增加total_frames_received
+                            return  # 当前帧已缓存，已增加total_frames_received
                         else:
                             # 没有缓存帧，直接处理当前帧
                             self._add_frame_to_queue(frame_data)
@@ -356,12 +359,12 @@ class AsyncVideoProcessor:
                             logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
                             self.frames_skipped_sync_mode += 1
                         self.pending_frame_data = frame_data
-                    return  # 不增加total_frames_received，因为帧被缓存而不是处理
+                    return  # 不处理当前帧，但已增加total_frames_received
             else:
                 # 异步模式，直接添加到队列
                 self._add_frame_to_queue(frame_data)
             
-            self.total_frames_received += 1
+            # 🔧 移除重复的计数器增加，因为已经在开头增加了
             
             if self.total_frames_received % 50 == 0:
                 if self.sync_inference_mode:
@@ -639,12 +642,36 @@ class AsyncVideoProcessor:
                         self.current_inference_details = None
                         self.last_inference_completion_time = time.time()
                 
-                # 🔧 修复：不再调用_process_pending_frame，避免处理过时的缓存帧
-                # 让add_frame方法中的新帧检测到推理空闲后自然处理最新帧
-                logger.debug("🔄 同步推理完成，等待新的实时帧...")
+                # 🔧 修复：推理完成后，主动处理pending frame（如果有的话）
+                # self._process_pending_frame_after_inference()
             
         # 注意：不删除临时文件，保留用于调试
         logger.debug(f"保留媒体文件用于调试: {media_path}")
+
+    def _process_pending_frame_after_inference(self):
+        """
+        推理完成后处理待处理的帧（同步推理模式）
+        
+        这个方法在推理完成后被调用，用于处理在推理期间积累的pending frame
+        """
+        try:
+            with self.pending_frame_lock:
+                if self.pending_frame_data is not None:
+                    pending_frame = self.pending_frame_data
+                    self.pending_frame_data = None  # 清空pending frame
+                    
+                    logger.info(f"🔄 推理完成后处理pending帧 {pending_frame['frame_number']}")
+                    
+                    # 将pending frame放入队列处理
+                    try:
+                        self.frame_queue.put(pending_frame, timeout=1)
+                        logger.debug(f"✅ pending帧 {pending_frame['frame_number']} 已入队处理")
+                    except queue.Full:
+                        logger.warning(f"帧队列已满，丢弃pending帧 {pending_frame['frame_number']}")
+                else:
+                    logger.debug("🔄 推理完成，无pending帧需要处理")
+        except Exception as e:
+            logger.error(f"处理pending frame失败: {str(e)}")
 
     def _process_pending_frame(self):
         """
@@ -1484,22 +1511,10 @@ class AsyncVideoProcessor:
                         if has_user_question:
                             logger.info("🚨 用户问题监听器检测到新问题，立即处理")
                             
-                            # 🔧 原子性获取用户问题，避免重复处理
-                            if not self.question_manager:
-                                logger.warning("用户问题管理器不存在，跳过处理")
-                                continue
-                                
-                            user_question, task_id = self.question_manager.acquire_question()
-                            if not user_question or not task_id:
-                                logger.debug("用户问题已被其他任务获取，跳过")
-                                continue
-                            
-                            logger.info(f"🚨 用户问题监听器获取到问题: {user_question} (任务ID: {task_id})")
-                            
                             # 🔧 用户问题强制中断：如果有推理在进行，强制重置推理状态
                             with self.current_inference_lock:
                                 if self.current_inference_active:
-                                    logger.warning("🚨 用户问题监听器强制中断当前推理，重置推理状态")
+                                    logger.warning("🚨 用户问题强制中断当前推理，重置推理状态")
                                     self.current_inference_active = False
                                     self.current_inference_details = None
                             
@@ -1519,16 +1534,12 @@ class AsyncVideoProcessor:
                                         logger.info("✅ 用户问题已通过监听器立即处理")
                                     except queue.Full:
                                         logger.warning("帧队列已满，用户问题处理失败")
-                                        # 如果队列满了，重新放回pending_frame，并释放问题
+                                        # 如果队列满了，重新放回pending_frame
                                         self.pending_frame_data = pending_frame
-                                        if self.question_manager:
-                                            self.question_manager.release_question(task_id, success=False)
-                                            logger.warning(f"队列满，已释放问题: {user_question}")
+                                        logger.warning("队列满，pending帧已恢复")
                                 else:
-                                    # 没有pending_frame，释放问题并等待下一个帧
-                                    if self.question_manager:
-                                        self.question_manager.release_question(task_id, success=False)
-                                    logger.info("🚨 用户问题监听器检测到问题，但无pending帧，已释放问题等待下一个帧")
+                                    # 没有pending_frame，等待下一个帧
+                                    logger.info("🚨 用户问题监听器检测到问题，但无pending帧，等待下一个帧处理")
                     
                     # 短暂休眠
                     time.sleep(0.1)
