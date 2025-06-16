@@ -270,9 +270,10 @@ class UserQuestionManager:
     def has_available_question(self) -> bool:
         """检查是否有可用的（未分配的）问题"""
         with self.question_lock:
-            # 🔧 修复竞争条件：预分配状态也算作不可用
+            # 🔧 修复竞争条件：预分配状态（pending）应该算作可用
+            # 只有真正分配给具体任务的问题才算不可用
             return (self.current_question is not None and 
-                    not self.question_assigned)
+                    (not self.question_assigned or self.assigned_task_id == "pending"))
     
     def get_question_info(self) -> Dict[str, Any]:
         """

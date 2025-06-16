@@ -123,6 +123,23 @@ class TTSService:
             logger.error(f"加载inference_result.json失败: {e}")
             return None
     
+    def _load_user_question_result(self, frame_dir: Path) -> Optional[Dict[Any, Any]]:
+        """加载frame目录中的user_question.json文件"""
+        try:
+            user_question_file = frame_dir / 'user_question.json'
+            if not user_question_file.exists():
+                logger.debug(f"user_question.json不存在: {user_question_file}")
+                return None
+            
+            with open(user_question_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"加载user_question.json失败: {e}")
+            return None
+    
     def _extract_summary_from_inference_result(self, inference_data: Dict[Any, Any]) -> Optional[str]:
         """从推理结果中提取summary字段"""
         try:
@@ -170,6 +187,22 @@ class TTSService:
             logger.error(f"从raw_result提取summary失败: {e}")
             return None
     
+    def _extract_response_from_user_question_result(self, user_question_data: Dict[Any, Any]) -> Optional[str]:
+        """从用户问题结果中提取response字段"""
+        try:
+            response = user_question_data.get('response', '')
+            
+            if response:
+                logger.debug(f"提取到用户问题回答: {response}")
+                return response
+            
+            logger.warning(f"用户问题结果中没有response字段")
+            return None
+            
+        except Exception as e:
+            logger.error(f"提取用户问题回答失败: {e}")
+            return None
+    
     def _send_to_tts(self, text: str) -> bool:
         """发送文本到TTS服务"""
         try:
@@ -215,6 +248,17 @@ class TTSService:
             logger.error(f"生成推理结果ID失败: {e}")
             return f"{frame_dir.name}_{time.time()}"
     
+    def _get_user_question_result_id(self, frame_dir: Path, user_question_data: Dict[Any, Any]) -> str:
+        """生成用户问题结果的唯一ID"""
+        try:
+            # 使用frame目录名和时间戳作为唯一标识
+            frame_name = frame_dir.name
+            timestamp = user_question_data.get('timestamp', 0)
+            return f"{frame_name}_user_question_{timestamp}"
+        except Exception as e:
+            logger.error(f"生成用户问题结果ID失败: {e}")
+            return f"{frame_dir.name}_user_question_{time.time()}"
+    
     def _process_new_results(self):
         """处理新的推理结果"""
         try:
@@ -232,6 +276,36 @@ class TTSService:
             # 处理新的推理结果
             new_results_count = 0
             for frame_dir in frame_dirs:
+                # 🆕 优先检查用户问题结果
+                user_question_data = self._load_user_question_result(frame_dir)
+                if user_question_data:
+                    # 生成用户问题结果的唯一ID
+                    user_question_id = self._get_user_question_result_id(frame_dir, user_question_data)
+                    
+                    # 跳过已处理的用户问题结果
+                    if user_question_id in self.processed_results:
+                        continue
+                    
+                    # 提取用户问题回答
+                    response = self._extract_response_from_user_question_result(user_question_data)
+                    
+                    if response:
+                        # 发送到TTS服务
+                        if self._send_to_tts(response):
+                            self.processed_results.add(user_question_id)
+                            new_results_count += 1
+                            logger.info(f"成功处理用户问题结果: {frame_dir.name}")
+                        else:
+                            logger.warning(f"TTS发送失败，用户问题结果ID: {user_question_id}")
+                    else:
+                        # 即使没有response也标记为已处理，避免重复处理
+                        self.processed_results.add(user_question_id)
+                        logger.debug(f"用户问题结果无response，跳过: {frame_dir.name}")
+                    
+                    # 如果处理了用户问题，跳过常规推理结果处理
+                    continue
+                
+                # 🔄 如果没有用户问题结果，处理常规推理结果
                 # 加载推理结果
                 inference_data = self._load_inference_result(frame_dir)
                 if not inference_data:

@@ -415,6 +415,22 @@ class CameraClient:
                             "ai_response": ai_response
                         }
             
+            # 检查是否包含单独的 reason 标签（观察完成状态）
+            elif "<reason>" in ai_response and "</reason>" in ai_response:
+                # 提取 reason 内容
+                reason = self._extract_xml_content(ai_response, "reason")
+                
+                logger.info(f"观察完成，无需工具调用: {reason}")
+                
+                return {
+                    "success": True,
+                    "tool_name": None,  # 无工具调用
+                    "arguments": {},
+                    "reason": reason or "观察已完成",
+                    "result": "观察任务已完成，无需进一步调整摄像头",
+                    "ai_response": ai_response
+                }
+            
             # 没有找到工具调用，可能是纯文本响应
             return {
                 "success": True,

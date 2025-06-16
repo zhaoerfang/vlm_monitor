@@ -137,6 +137,12 @@ class AsyncVideoProcessor:
         self._last_sentry_mode_check = 0  # 上次检查哨兵模式的时间
         self._sentry_mode_check_interval = 5.0  # 检查间隔（秒）
         
+        # 🆕 用户问题主动监听机制
+        self.user_question_monitor_thread = None
+        self.user_question_monitor_enabled = True  # 是否启用用户问题主动监听
+        self.last_question_check_time = 0  # 上次检查用户问题的时间
+        self.question_check_interval = 0.5  # 用户问题检查间隔（秒）
+        
         logger.info(f"异步视频处理器初始化:")
         if self.image_mode:
             logger.info(f"  - 🖼️ 图像模式已启用（每帧单独推理）")
@@ -183,6 +189,15 @@ class AsyncVideoProcessor:
         )
         self.inference_loop.start()
         
+        # 🆕 启动用户问题监听线程
+        if self.question_manager and self.user_question_monitor_enabled:
+            self.user_question_monitor_thread = threading.Thread(
+                target=self._user_question_monitor_worker,
+                name="UserQuestionMonitor"
+            )
+            self.user_question_monitor_thread.start()
+            logger.info("用户问题主动监听线程已启动")
+        
         # 等待事件循环启动完成
         max_wait = 5.0  # 最多等待5秒
         wait_start = time.time()
@@ -201,6 +216,11 @@ class AsyncVideoProcessor:
         # 停止用户问题管理器（如果存在）
         if self.question_manager:
             self.question_manager.stop()
+        
+        # 🆕 停止用户问题监听线程
+        if self.user_question_monitor_thread:
+            self.user_question_monitor_thread.join(timeout=5)
+            logger.info("用户问题监听线程已停止")
         
         if self.video_writer_thread:
             self.video_writer_thread.join()
@@ -287,10 +307,30 @@ class AsyncVideoProcessor:
                     inference_active = self.current_inference_active
                 
                 if has_user_question:
-                    # 用户问题优先，立即处理
+                    # 🚨 用户问题优先，立即处理帧
                     logger.info(f"🚨 检测到用户问题，优先处理帧 {frame_data['frame_number']}")
-                    self._add_frame_to_queue(frame_data)
-                    self.user_questions_processed += 1
+                    
+                    # 🔧 用户问题强制中断：如果有推理在进行，强制重置推理状态
+                    with self.current_inference_lock:
+                        if self.current_inference_active:
+                            logger.warning(f"🚨 用户问题强制中断当前推理，重置推理状态")
+                            self.current_inference_active = False
+                            self.current_inference_details = None
+                    
+                    # 🔧 优化：如果有缓存帧，优先使用缓存帧处理用户问题（缓存帧可能更接近问题提出的时间）
+                    with self.pending_frame_lock:
+                        if self.pending_frame_data is not None:
+                            # 使用缓存帧处理用户问题，当前帧成为新的缓存帧
+                            pending_frame = self.pending_frame_data
+                            self.pending_frame_data = frame_data  # 当前帧成为新的缓存帧
+                            logger.info(f"🚨 使用缓存帧 {pending_frame['frame_number']} 处理用户问题，当前帧 {frame_data['frame_number']} 成为新缓存")
+                            self._add_frame_to_queue(pending_frame)
+                            self.user_questions_processed += 1
+                            return  # 当前帧已缓存，不增加total_frames_received
+                        else:
+                            # 没有缓存帧，直接使用当前帧处理用户问题
+                            self._add_frame_to_queue(frame_data)
+                            self.user_questions_processed += 1
                 elif not inference_active:
                     # 没有推理在进行，可以处理新帧
                     logger.debug(f"✅ 推理空闲，处理帧 {frame_data['frame_number']}")
@@ -308,14 +348,14 @@ class AsyncVideoProcessor:
                             # 没有缓存帧，直接处理当前帧
                             self._add_frame_to_queue(frame_data)
                 else:
-                    # # 有推理在进行，更新待处理帧（保留最新帧）
-                    # with self.pending_frame_lock:
-                    #     if self.pending_frame_data is None:
-                    #         logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
-                    #     else:
-                    #         logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
-                    #         self.frames_skipped_sync_mode += 1
-                    #     self.pending_frame_data = frame_data
+                    # 🔧 修复：有推理在进行，始终维护最新的待处理帧（保留最新帧）
+                    with self.pending_frame_lock:
+                        if self.pending_frame_data is None:
+                            logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
+                        else:
+                            logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
+                            self.frames_skipped_sync_mode += 1
+                        self.pending_frame_data = frame_data
                     return  # 不增加total_frames_received，因为帧被缓存而不是处理
             else:
                 # 异步模式，直接添加到队列
@@ -323,14 +363,7 @@ class AsyncVideoProcessor:
             
             self.total_frames_received += 1
             
-            if self.total_frames_received % 50 == 0:                    # # 有推理在进行，更新待处理帧（保留最新帧）
-                    # with self.pending_frame_lock:
-                    #     if self.pending_frame_data is None:
-                    #         logger.debug(f"⏳ 推理进行中，缓存帧 {frame_data['frame_number']}")
-                    #     else:
-                    #         logger.debug(f"⏳ 推理进行中，更新缓存帧 {self.pending_frame_data['frame_number']} -> {frame_data['frame_number']}")
-                    #         self.frames_skipped_sync_mode += 1
-                    #     self.pending_frame_data = frame_data
+            if self.total_frames_received % 50 == 0:
                 if self.sync_inference_mode:
                     logger.info(f"已接收 {self.total_frames_received} 帧 "
                               f"(缩放: {self.frames_resized}, 无效: {self.frames_invalid}, "
@@ -1423,4 +1456,88 @@ class AsyncVideoProcessor:
             if self.pending_frame_data:
                 status['pending_frame_number'] = self.pending_frame_data['frame_number']
         
-        return status 
+        return status
+    
+    def _user_question_monitor_worker(self):
+        """
+        用户问题主动监听工作线程
+        
+        主动检测用户问题的到达，不依赖于新帧的输入
+        当检测到用户问题时，立即处理pending_frame或触发推理中断
+        """
+        logger.info("用户问题监听线程启动")
+        
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    current_time = time.time()
+                    
+                    # 检查是否需要检查用户问题
+                    if current_time - self.last_question_check_time >= self.question_check_interval:
+                        self.last_question_check_time = current_time
+                        
+                        # 检查是否有用户问题
+                        has_user_question = False
+                        if self.question_manager:
+                            has_user_question = self.question_manager.has_available_question()
+                        
+                        if has_user_question:
+                            logger.info("🚨 用户问题监听器检测到新问题，立即处理")
+                            
+                            # 🔧 原子性获取用户问题，避免重复处理
+                            if not self.question_manager:
+                                logger.warning("用户问题管理器不存在，跳过处理")
+                                continue
+                                
+                            user_question, task_id = self.question_manager.acquire_question()
+                            if not user_question or not task_id:
+                                logger.debug("用户问题已被其他任务获取，跳过")
+                                continue
+                            
+                            logger.info(f"🚨 用户问题监听器获取到问题: {user_question} (任务ID: {task_id})")
+                            
+                            # 🔧 用户问题强制中断：如果有推理在进行，强制重置推理状态
+                            with self.current_inference_lock:
+                                if self.current_inference_active:
+                                    logger.warning("🚨 用户问题监听器强制中断当前推理，重置推理状态")
+                                    self.current_inference_active = False
+                                    self.current_inference_details = None
+                            
+                            # 🔧 检查是否有pending_frame可以立即处理
+                            with self.pending_frame_lock:
+                                if self.pending_frame_data is not None:
+                                    # 有pending_frame，立即处理
+                                    pending_frame = self.pending_frame_data
+                                    self.pending_frame_data = None  # 清空pending_frame
+                                    
+                                    logger.info(f"🚨 用户问题监听器使用pending帧 {pending_frame['frame_number']} 立即处理用户问题")
+                                    
+                                    # 直接将pending_frame放入队列处理
+                                    try:
+                                        self.frame_queue.put(pending_frame, timeout=1)
+                                        self.user_questions_processed += 1
+                                        logger.info("✅ 用户问题已通过监听器立即处理")
+                                    except queue.Full:
+                                        logger.warning("帧队列已满，用户问题处理失败")
+                                        # 如果队列满了，重新放回pending_frame，并释放问题
+                                        self.pending_frame_data = pending_frame
+                                        if self.question_manager:
+                                            self.question_manager.release_question(task_id, success=False)
+                                            logger.warning(f"队列满，已释放问题: {user_question}")
+                                else:
+                                    # 没有pending_frame，释放问题并等待下一个帧
+                                    if self.question_manager:
+                                        self.question_manager.release_question(task_id, success=False)
+                                    logger.info("🚨 用户问题监听器检测到问题，但无pending帧，已释放问题等待下一个帧")
+                    
+                    # 短暂休眠
+                    time.sleep(0.1)
+                    
+                except Exception as e:
+                    logger.error(f"用户问题监听器错误: {str(e)}")
+                    time.sleep(1)  # 出错时等待更长时间
+                    
+        except Exception as e:
+            logger.error(f"用户问题监听线程异常: {str(e)}")
+        finally:
+            logger.info("用户问题监听线程结束") 

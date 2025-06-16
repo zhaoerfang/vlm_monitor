@@ -1303,6 +1303,10 @@ async def get_media_history(limit: int = 50):
                                 has_inference_result = inference_result_file.exists()
                                 has_mcp_result = mcp_result_file.exists()
                                 
+                                # 🆕 检查是否有用户问题结果
+                                user_question_file = item / 'user_question.json'
+                                has_user_question_result = user_question_file.exists()
+                                
                                 media_item = {
                                     'type': 'image',
                                     'media_path': safe_relative_path(image_file),
@@ -1314,9 +1318,22 @@ async def get_media_history(limit: int = 50):
                                     'creation_time': image_details.get('creation_time'),
                                     'has_inference_result': has_inference_result,
                                     'has_mcp_result': has_mcp_result,
+                                    'has_user_question_result': has_user_question_result,  # 🆕 新增字段
                                     'details_dir': safe_relative_path(item),
                                     'image_dimensions': image_details.get('image_dimensions', {})
                                 }
+                                
+                                # 🆕 优先处理用户问题结果
+                                if has_user_question_result:
+                                    with open(user_question_file, 'r', encoding='utf-8') as f:
+                                        user_question_result = json.load(f)
+                                    
+                                    media_item.update({
+                                        'user_question': user_question_result.get('user_question', ''),  # 用户问题
+                                        'response': user_question_result.get('response', ''),  # 用户问题回答
+                                        'user_question_timestamp': user_question_result.get('timestamp_iso', ''),  # 用户问题时间戳
+                                        'analysis_type': 'user_question'  # 标记为用户问题类型
+                                    })
                                 
                                 # 如果有推理结果，添加推理信息
                                 if has_inference_result:
@@ -1333,10 +1350,16 @@ async def get_media_history(limit: int = 50):
                                         'inference_duration': inference_result.get('inference_duration'),
                                         'inference_start_timestamp': inference_result.get('inference_start_timestamp'),
                                         'inference_end_timestamp': inference_result.get('inference_end_timestamp'),
-                                        'user_question': inference_result.get('user_question'),  # 用户问题
-                                        'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
                                         'raw_result': inference_result.get('raw_result')  # 原始结果
                                     })
+                                    
+                                    # 🔄 如果没有用户问题结果，使用推理结果中的response字段
+                                    if not has_user_question_result:
+                                        media_item.update({
+                                            'user_question': inference_result.get('user_question'),  # 用户问题
+                                            'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
+                                            'analysis_type': 'vlm_inference'  # 标记为VLM推理类型
+                                        })
                                 
                                 # 如果有MCP结果，添加思考与行动信息
                                 if has_mcp_result:
@@ -1378,6 +1401,10 @@ async def get_media_history(limit: int = 50):
                                 has_inference_result = inference_result_file.exists()
                                 has_mcp_result = mcp_result_file.exists()
                                 
+                                # 🆕 检查是否有用户问题结果
+                                user_question_file = item / 'user_question.json'
+                                has_user_question_result = user_question_file.exists()
+                                
                                 media_item = {
                                     'type': 'video',
                                     'media_path': safe_relative_path(video_file),
@@ -1390,6 +1417,7 @@ async def get_media_history(limit: int = 50):
                                     'sampled_frames': video_details.get('sampled_frames', []),
                                     'has_inference_result': has_inference_result,
                                     'has_mcp_result': has_mcp_result,
+                                    'has_user_question_result': has_user_question_result,  # 🆕 新增字段
                                     'details_dir': safe_relative_path(item)
                                 }
                                 
@@ -1407,6 +1435,18 @@ async def get_media_history(limit: int = 50):
                                         ]
                                     })
                                 
+                                # 🆕 优先处理用户问题结果
+                                if has_user_question_result:
+                                    with open(user_question_file, 'r', encoding='utf-8') as f:
+                                        user_question_result = json.load(f)
+                                    
+                                    media_item.update({
+                                        'user_question': user_question_result.get('user_question', ''),  # 用户问题
+                                        'response': user_question_result.get('response', ''),  # 用户问题回答
+                                        'user_question_timestamp': user_question_result.get('timestamp_iso', ''),  # 用户问题时间戳
+                                        'analysis_type': 'user_question'  # 标记为用户问题类型
+                                    })
+                                
                                 # 如果有推理结果，添加推理信息
                                 if has_inference_result:
                                     with open(inference_result_file, 'r', encoding='utf-8') as f:
@@ -1422,10 +1462,16 @@ async def get_media_history(limit: int = 50):
                                         'inference_duration': inference_result.get('inference_duration'),
                                         'inference_start_timestamp': inference_result.get('inference_start_timestamp'),
                                         'inference_end_timestamp': inference_result.get('inference_end_timestamp'),
-                                        'user_question': inference_result.get('user_question'),  # 用户问题
-                                        'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
                                         'raw_result': inference_result.get('raw_result')  # 原始结果
                                     })
+                                    
+                                    # 🔄 如果没有用户问题结果，使用推理结果中的response字段
+                                    if not has_user_question_result:
+                                        media_item.update({
+                                            'user_question': inference_result.get('user_question'),  # 用户问题
+                                            'response': parsed_result.get('response') or parsed_result.get('answer'),  # AI回答
+                                            'analysis_type': 'vlm_inference'  # 标记为VLM推理类型
+                                        })
                                 
                                 # 如果有MCP结果，添加思考与行动信息
                                 if has_mcp_result:

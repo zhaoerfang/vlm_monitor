@@ -27,38 +27,43 @@ class DashScopeVLMClient:
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, 
                  base_url: Optional[str] = None):
         """
-        初始化DashScope VLM客户端（使用OpenAI SDK）
+        初始化DashScope VLM客户端
         
         Args:
             api_key: API密钥，如果为None则从配置文件读取
-            model: 使用的模型名称，如果为None则从配置文件读取
+            model: 模型名称，如果为None则从配置文件读取
             base_url: API基础URL，如果为None则从配置文件读取
         """
         # 加载配置
         config = load_config()
         vlm_config = config.get('vlm', {})
         
-        # 获取API密钥
+        # 设置API参数
         self.api_key = api_key or vlm_config.get('api_key')
-        if not self.api_key:
-            # 尝试从环境变量获取
-            self.api_key = os.environ.get('DASHSCOPE_API_KEY')
+        self.model = model or vlm_config.get('model', 'qwen-vl-max')
+        self.base_url = base_url or vlm_config.get('base_url')
         
         if not self.api_key:
-            raise ValueError("API密钥未设置，请在配置文件中设置、设置DASHSCOPE_API_KEY环境变量或传入api_key参数")
+            raise ValueError("API密钥未设置，请在配置文件中设置vlm.api_key或传入api_key参数")
         
-        # 获取其他配置
-        self.model = model or vlm_config.get('model', 'qwen-vl-max-latest')
-        self.base_url = base_url or vlm_config.get('base_url', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+        # 文件大小限制
         self.max_video_size_mb = vlm_config.get('max_video_size_mb', 100)
         self.max_base64_size_mb = vlm_config.get('max_base64_size_mb', 10)
         
-        # 获取默认提示词
+        # 提示词配置
         self.default_prompt = vlm_config.get('default_prompt', {})
+        self.user_question_prompt = vlm_config.get('user_question_prompt', {})
+        
         self.system_prompt = self.default_prompt.get('system', 
             "You are a helpful assistant that analyzes videos and returns structured JSON responses.")
         self.user_prompt_template = self.default_prompt.get('user_template', 
             "请分析这段视频内容")
+        
+        # 用户问题专用提示词
+        self.user_question_system_prompt = self.user_question_prompt.get('system',
+            "你是一个图像分析助手，请根据图像内容回答用户问题。")
+        self.user_question_template = self.user_question_prompt.get('user_template',
+            "请根据这张图像回答用户的问题：{user_question}")
         
         # 创建异步OpenAI客户端
         self.async_client = AsyncOpenAI(
@@ -75,6 +80,7 @@ class DashScopeVLMClient:
         logger.info(f"  - 基础URL: {self.base_url}")
         logger.info(f"  - 最大视频大小: {self.max_video_size_mb}MB")
         logger.info(f"  - 最大Base64大小: {self.max_base64_size_mb}MB")
+        logger.info(f"  - 用户问题专用提示词已配置: {'是' if self.user_question_prompt else '否'}")
         
     def _is_video_file(self, file_path: str) -> bool:
         """判断文件是否为视频文件"""
@@ -293,7 +299,7 @@ class DashScopeVLMClient:
         Args:
             image_path: 图像文件路径
             prompt: 分析提示词，如果为None则使用配置文件中的默认提示词
-            user_question: 用户问题，如果有则会添加到提示词中
+            user_question: 用户问题，如果有则会启动并行推理
             enable_camera_control: 是否启用摄像头控制功能
             
         Returns:
@@ -313,52 +319,57 @@ class DashScopeVLMClient:
             if enable_camera_control:
                 logger.info("启用摄像头控制功能")
             
-            # 创建并行任务列表
-            tasks = []
+            # 🚀 启动VLM图像分析任务（总是执行，这是主要任务）
+            vlm_task = asyncio.create_task(self._perform_vlm_analysis(image_path, prompt, None))  # 不传递用户问题
+            logger.info("🚀 VLM图像分析任务已启动")
             
-            # 任务1: VLM图像分析（总是执行）
-            vlm_task = asyncio.create_task(self._perform_vlm_analysis(image_path, prompt, user_question))
-            tasks.append(vlm_task)
+            # 收集所有需要等待的任务
+            all_tasks = [vlm_task]
             
-            # 任务2: MCP摄像头控制（如果启用且没有用户问题）
-            mcp_task = None
+            # 🚀 启动用户问题回答任务（如果有用户问题，独立执行并立即保存）
+            if user_question:
+                user_question_task = asyncio.create_task(
+                    self._perform_and_save_user_question_analysis(image_path, user_question)
+                )
+                all_tasks.append(user_question_task)
+                logger.info("🚀 用户问题回答任务已启动（独立执行）")
+            
+            # 🚀 启动MCP摄像头控制任务（如果启用且没有用户问题，独立执行）
             if enable_camera_control and not user_question:
-                mcp_task = asyncio.create_task(self._perform_mcp_control(image_path, user_question))
-                tasks.append(mcp_task)
+                mcp_task = asyncio.create_task(
+                    self._perform_and_save_mcp_control(image_path, user_question)
+                )
+                all_tasks.append(mcp_task)
+                logger.info("🚀 MCP摄像头控制任务已启动（独立执行）")
             
-            # 并行执行所有任务
-            logger.info(f"🚀 开始并行执行 {len(tasks)} 个任务...")
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # ⚡ 等待所有任务完成，确保 release_question 时机正确
+            logger.info(f"⚡ 等待 {len(all_tasks)} 个任务全部完成...")
+            results = await asyncio.gather(*all_tasks, return_exceptions=True)
             
-            # 处理VLM分析结果
+            # 处理VLM分析结果（第一个任务）
             vlm_result = results[0]
             if isinstance(vlm_result, Exception):
                 logger.error(f"VLM分析失败: {vlm_result}")
                 vlm_result = None
             
-            # 处理MCP控制结果
-            mcp_result = None
-            if mcp_task is not None and len(results) > 1:
-                mcp_result_raw = results[1]
-                if isinstance(mcp_result_raw, Exception):
-                    logger.error(f"MCP控制失败: {mcp_result_raw}")
-                    mcp_result = None
-                elif isinstance(mcp_result_raw, dict):
-                    mcp_result = mcp_result_raw
-                else:
-                    logger.warning(f"MCP控制返回了意外的结果类型: {type(mcp_result_raw)}")
-                    mcp_result = None
-            
-            # 保存MCP结果到对应的frame详情目录
-            if mcp_result and isinstance(mcp_result, dict):
-                self._save_mcp_result_to_details(image_path, mcp_result)
+            # 检查其他任务的执行状态（用于日志记录）
+            if len(results) > 1:
+                for i, result in enumerate(results[1:], 1):
+                    task_name = "用户问题回答" if user_question else "MCP控制"
+                    if isinstance(result, Exception):
+                        logger.error(f"{task_name}任务失败: {result}")
+                    else:
+                        logger.info(f"✅ {task_name}任务已完成")
             
             # 确保vlm_result是字符串或None
             if vlm_result is not None and not isinstance(vlm_result, str):
                 logger.warning(f"VLM分析返回了意外的结果类型: {type(vlm_result)}")
                 vlm_result = None
             
-            logger.info(f"✅ 并行任务执行完成，VLM结果长度: {len(vlm_result) if vlm_result else 0} 字符")
+            logger.info(f"✅ VLM图像分析完成，结果长度: {len(vlm_result) if vlm_result else 0} 字符")
+            if user_question:
+                logger.info("🤔 用户问题回答任务正在后台独立执行...")
+            
             return vlm_result
                 
         except Exception as e:
@@ -442,6 +453,78 @@ class DashScopeVLMClient:
                 
         except Exception as e:
             logger.error(f"VLM图像分析失败: {str(e)}")
+            return None
+
+    async def _perform_user_question_analysis(self, image_path: str, user_question: str) -> Optional[str]:
+        """
+        执行用户问题专用的图像分析
+        
+        Args:
+            image_path: 图像文件路径
+            user_question: 用户问题
+            
+        Returns:
+            用户问题回答结果
+        """
+        try:
+            logger.info("🤔 开始用户问题分析...")
+            user_question_start_time = time.time()
+            
+            # 编码图像为base64
+            base64_image = self.encode_image(image_path)
+            
+            # 获取图像文件扩展名，用于确定MIME类型
+            ext = Path(image_path).suffix.lower()
+            mime_type = {
+                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.png': 'image/png', '.bmp': 'image/bmp',
+                '.gif': 'image/gif', '.tiff': 'image/tiff',
+                '.webp': 'image/webp'
+            }.get(ext, 'image/jpeg')
+            
+            # 使用用户问题专用的提示词
+            user_prompt = self.user_question_template.format(user_question=user_question)
+            
+            # 构建消息 - 图像格式
+            messages: List[Dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": self.user_question_system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{base64_image}"},
+                        },
+                        {"type": "text", "text": user_prompt},
+                    ],
+                }
+            ]
+            
+            # 异步调用API
+            completion = await self.async_client.chat.completions.create(
+                model=self.model,
+                messages=messages  # type: ignore
+            )
+            
+            # 处理响应
+            if completion.choices and len(completion.choices) > 0:
+                result = completion.choices[0].message.content
+                if result is not None:
+                    user_question_duration = time.time() - user_question_start_time
+                    logger.info(f"✅ 用户问题分析完成，耗时: {user_question_duration:.2f}s，结果长度: {len(result)} 字符")
+                    return result
+                else:
+                    logger.error("用户问题分析API返回结果为空")
+                    return None
+            else:
+                logger.error(f"用户问题分析API响应格式异常: {completion}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"用户问题分析失败: {str(e)}")
             return None
 
     async def _perform_mcp_control(self, image_path: str, user_question: Optional[str] = None) -> Optional[Dict]:
@@ -570,6 +653,54 @@ class DashScopeVLMClient:
                 'mcp_exception': True
             }
             return mcp_result
+
+    async def _perform_and_save_user_question_analysis(self, image_path: str, user_question: str) -> None:
+        """
+        执行用户问题分析并立即保存结果（独立任务）
+        
+        Args:
+            image_path: 图像文件路径
+            user_question: 用户问题
+        """
+        try:
+            logger.info("🤔 开始独立执行用户问题分析...")
+            
+            # 执行用户问题分析
+            user_answer = await self._perform_user_question_analysis(image_path, user_question)
+            
+            if user_answer and isinstance(user_answer, str):
+                # 立即保存用户问题结果
+                self._save_user_question_result_to_details(image_path, user_question, user_answer)
+                logger.info("✅ 用户问题分析完成并已保存")
+            else:
+                logger.error("❌ 用户问题分析失败或返回空结果")
+                
+        except Exception as e:
+            logger.error(f"❌ 独立用户问题分析任务失败: {str(e)}")
+
+    async def _perform_and_save_mcp_control(self, image_path: str, user_question: Optional[str] = None) -> None:
+        """
+        执行MCP摄像头控制并立即保存结果（独立任务）
+        
+        Args:
+            image_path: 图像文件路径
+            user_question: 用户问题
+        """
+        try:
+            logger.info("🎯 开始独立执行MCP摄像头控制...")
+            
+            # 执行MCP控制
+            mcp_result = await self._perform_mcp_control(image_path, user_question)
+            
+            if mcp_result and isinstance(mcp_result, dict):
+                # 立即保存MCP结果
+                self._save_mcp_result_to_details(image_path, mcp_result)
+                logger.info("✅ MCP摄像头控制完成并已保存")
+            else:
+                logger.error("❌ MCP摄像头控制失败或返回空结果")
+                
+        except Exception as e:
+            logger.error(f"❌ 独立MCP控制任务失败: {str(e)}")
     
     def _save_mcp_result_to_details(self, image_path: str, mcp_result: Dict):
         """
@@ -620,6 +751,50 @@ class DashScopeVLMClient:
             
         except Exception as e:
             logger.error(f"保存MCP结果失败: {str(e)}")
+    
+    def _save_user_question_result_to_details(self, image_path: str, user_question: str, user_answer: str):
+        """
+        保存用户问题结果到对应的frame详情目录
+        
+        Args:
+            image_path: 图像文件路径
+            user_question: 用户问题
+            user_answer: 用户问题回答
+        """
+        try:
+            # 从图像路径推断frame详情目录
+            # 图像路径格式通常为: .../session_*/frame_*_details/frame_*.jpg
+            image_path_obj = Path(image_path)
+            
+            # 检查是否在details目录中
+            if image_path_obj.parent.name.endswith('_details'):
+                details_dir = image_path_obj.parent
+            else:
+                # 如果不在details目录中，尝试查找对应的details目录
+                logger.warning(f"图像路径不在details目录中: {image_path}")
+                return
+            
+            # 创建用户问题结果文件路径
+            user_question_result_file = details_dir / 'user_question.json'
+            
+            # 构建用户问题结果数据
+            user_question_data = {
+                'image_path': image_path,
+                'user_question': user_question,
+                'response': user_answer,
+                'timestamp': time.time(),
+                'timestamp_iso': datetime.now().isoformat(),
+                'analysis_type': 'user_question'
+            }
+            
+            # 保存用户问题结果到文件
+            with open(user_question_result_file, 'w', encoding='utf-8') as f:
+                json_module.dump(user_question_data, f, ensure_ascii=False, indent=2, default=str)
+            
+            logger.info(f"用户问题结果已保存到: {user_question_result_file}")
+            
+        except Exception as e:
+            logger.error(f"保存用户问题结果失败: {str(e)}")
     
     async def analyze_media_async(self, media_path: str, prompt: Optional[str] = None, fps: int = 2) -> Optional[str]:
         """
